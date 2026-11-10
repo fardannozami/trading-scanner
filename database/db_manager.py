@@ -113,6 +113,7 @@ def init_db():
             sl REAL NOT NULL,
             tp1 REAL NOT NULL,
             tp2 REAL NOT NULL,
+            tp REAL,
             risk REAL,
             open_bar_time TEXT,
             opened_at TIMESTAMP,
@@ -125,6 +126,12 @@ def init_db():
             FOREIGN KEY (setup_id) REFERENCES setups(id)
         )
     """)
+
+    # Lightweight migration: databases created before the target-TP snapshot
+    # column existed keep working; new trades record the target chosen at open.
+    columns = {row[1] for row in c.execute("PRAGMA table_info(paper_trades)")}
+    if "tp" not in columns:
+        c.execute("ALTER TABLE paper_trades ADD COLUMN tp REAL")
 
     c.execute("""
         CREATE INDEX IF NOT EXISTS idx_paper_status
@@ -484,21 +491,21 @@ def get_risk_log(limit=100):
 
 def create_paper_trade(symbol, strategy, direction, grade, score, conditions,
                        session, timeframe, lot, entry, sl, tp1, tp2, risk,
-                       open_bar_time, setup_id=None, signal_key=None):
+                       open_bar_time, setup_id=None, signal_key=None, tp=None):
     """Insert a virtual position. Returns the row, or None if it already exists."""
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
         INSERT OR IGNORE INTO paper_trades (
             signal_key, setup_id, symbol, strategy, direction, grade, score,
-            conditions, session, timeframe, lot, entry, sl, tp1, tp2, risk,
+            conditions, session, timeframe, lot, entry, sl, tp1, tp2, tp, risk,
             open_bar_time, opened_at, status
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
     """, (
         signal_key, setup_id, symbol, strategy, direction, grade, score,
         json.dumps(conditions or []), session, timeframe, lot, entry, sl,
-        tp1, tp2, risk, open_bar_time, utc_timestamp(),
+        tp1, tp2, tp, risk, open_bar_time, utc_timestamp(),
     ))
     inserted = c.rowcount > 0
     trade_id = c.lastrowid

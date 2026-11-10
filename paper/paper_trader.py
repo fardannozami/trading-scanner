@@ -148,6 +148,7 @@ def open_from_signal(symbol, analysis, scoring, setup_id=None,
         sl=float(sl),
         tp1=float(tp1),
         tp2=float(tp2) if tp2 is not None else float(tp1),
+        tp=float(target),
         risk=round(risk, 5),
         open_bar_time=open_bar_time,
         setup_id=setup_id,
@@ -186,21 +187,29 @@ def _is_expired(trade):
 
 def _evaluate_trade(trade, df):
     """Check a single open trade against candles. Returns a close event or None."""
-    if df is None or df.empty or not trade.get("open_bar_time"):
+    if df is None or df.empty:
         return None
 
-    try:
-        open_bar = pd.Timestamp(trade["open_bar_time"])
-    except (TypeError, ValueError):
-        return None
+    open_bar = None
+    if trade.get("open_bar_time"):
+        try:
+            open_bar = pd.Timestamp(trade["open_bar_time"])
+        except (TypeError, ValueError):
+            open_bar = None
+        if open_bar is not None and pd.isna(open_bar):
+            open_bar = None
 
     # Entry is the close of the signal bar, so evaluation starts on the next
-    # candle. The candle itself is never partly replayed.
-    bars = df[df.index > open_bar]
+    # candle. The candle itself is never partly replayed. Without a recorded
+    # open bar the SL/TP replay is skipped, but the trade can still expire.
+    bars = df[df.index > open_bar] if open_bar is not None else df.iloc[0:0]
     direction = trade["direction"]
     entry = float(trade["entry"])
     sl = float(trade["sl"])
-    tp = _target_price({"tp1": trade["tp1"], "tp2": trade["tp2"]})
+    tp = trade.get("tp")
+    if tp is None:
+        # Legacy rows created before the target was snapshotted at open time.
+        tp = _target_price({"tp1": trade["tp1"], "tp2": trade["tp2"]})
     tp = float(tp)
     risk = abs(float(trade.get("risk") or (entry - sl)))
 

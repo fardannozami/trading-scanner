@@ -363,7 +363,11 @@ def show_journal():
             if st.form_submit_button("Log Trade", type="primary"):
                 if min(entry, sl, tp) <= 0:
                     st.error("Entry, stop loss and take profit must be greater than zero.")
-                elif not (sl < entry < tp or tp < entry < sl):
+                elif (
+                    direction.lower() == "buy" and not (sl < entry < tp)
+                ) or (
+                    direction.lower() == "sell" and not (tp < entry < sl)
+                ):
                     st.error("Levels are inconsistent with the selected direction.")
                 else:
                     tid = log_trade(

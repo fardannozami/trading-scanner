@@ -6,7 +6,8 @@
       "Shell(where:*)",
       "Shell(dir /b /s venv .venv env 2>nul)",
       "Shell(.venvScriptspython.exe:*)",
-      "Shell(tasklist:*)"
+      "Shell(tasklist:*)",
+      "Shell(set:*)"
     ],
     "deny": [],
     "defaultMode": "default"
