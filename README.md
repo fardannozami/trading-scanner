@@ -63,7 +63,7 @@ Each setup is dynamically scored (max **14 points**) and graded:
 ### Notification Channels and Pairing
 
 `ALERT_CHANNELS` routes every outbound notification to `telegram`, `whatsapp`, or
-`telegram,whatsapp` (default: Telegram). A failure in one provider is logged and
+`both` (equivalent to `telegram,whatsapp`; default: Telegram). A failure in one provider is logged and
 does not prevent delivery through the other provider or stop the scanner.
 Telegram receives chart photos; WhatsApp currently receives the text caption.
 
@@ -105,7 +105,7 @@ go -C whatsapp_service mod tidy
 go -C whatsapp_service run ./cmd/whatsappd
 ```
 
-Set `ALERT_CHANNELS=whatsapp` or `ALERT_CHANNELS=telegram,whatsapp`, generate a
+Set `ALERT_CHANNELS=whatsapp` or `ALERT_CHANNELS=both`, generate a
 long random `WHATSAPP_SERVICE_TOKEN`, and configure `WHATSAPP_PHONE` in
 international format plus `WHATSAPP_RECIPIENT_JID`. A private JID looks like
 `6281234567890@s.whatsapp.net`; a group JID ends with `@g.us`.
@@ -352,7 +352,7 @@ All values are read from `.env` (see `.env.example` for a template).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ALERT_CHANNELS` | `telegram` | Outbound channels: `telegram`, `whatsapp`, or `telegram,whatsapp` |
+| `ALERT_CHANNELS` | `telegram` | Outbound channels: `telegram`, `whatsapp`, `both`, or `telegram,whatsapp` |
 | `TELEGRAM_PAIR_CODE_TTL_MINUTES` | `10` | Lifetime of a Telegram chat pairing code |
 | `TELEGRAM_PAIR_MAX_ATTEMPTS` | `5` | Pairing attempts per chat/sender per time window |
 | `WHATSAPP_SERVICE_URL` | `http://127.0.0.1:8787` | Local whatsmeow service address |

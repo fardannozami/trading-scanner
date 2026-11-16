@@ -40,8 +40,8 @@ class NotificationTests(unittest.TestCase):
             "from": {"id": 987},
         })
         targets = db.get_telegram_targets()
-        self.assertEqual(targets[0]["chat_id"], "-100123")
-        self.assertEqual(targets[0]["chat_type"], "group")
+        paired_target = next(row for row in targets if row["chat_id"] == "-100123")
+        self.assertEqual(paired_target["chat_type"], "group")
         self.assertFalse(db.consume_telegram_pair_code(
             hash_pair_code(code), "-100456", "group", "100"
         ))

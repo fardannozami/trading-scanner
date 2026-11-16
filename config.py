@@ -22,7 +22,7 @@ TELEGRAM_PAIR_CODE_TTL_MINUTES = int(os.getenv("TELEGRAM_PAIR_CODE_TTL_MINUTES",
 TELEGRAM_PAIR_MAX_ATTEMPTS = int(os.getenv("TELEGRAM_PAIR_MAX_ATTEMPTS", "5"))
 
 if not ALERT_CHANNELS or any(c not in {"telegram", "whatsapp"} for c in ALERT_CHANNELS):
-    raise ValueError("ALERT_CHANNELS must be telegram, whatsapp, or telegram,whatsapp")
+    raise ValueError("ALERT_CHANNELS must be telegram, whatsapp, both, or telegram,whatsapp")
 if len(set(ALERT_CHANNELS)) != len(ALERT_CHANNELS):
     raise ValueError("ALERT_CHANNELS contains duplicate channels")
 
