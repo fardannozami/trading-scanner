@@ -90,9 +90,21 @@ def init_db():
             daily_dd REAL,
             weekly_dd REAL,
             consecutive_losses INTEGER,
-            trading_allowed INTEGER
+            trading_allowed INTEGER,
+            login INTEGER,
+            currency TEXT
         )
     """)
+
+    # Migration: drawdown baselines must be compared per account and per
+    # currency, otherwise switching from an IDR account to a USD account looks
+    # like a ~97% drawdown. Legacy rows keep NULL and are ignored when a login
+    # is supplied.
+    risk_columns = {row[1] for row in c.execute("PRAGMA table_info(risk_log)")}
+    if "login" not in risk_columns:
+        c.execute("ALTER TABLE risk_log ADD COLUMN login INTEGER")
+    if "currency" not in risk_columns:
+        c.execute("ALTER TABLE risk_log ADD COLUMN currency TEXT")
 
     # Virtual (paper) positions opened from scanner signals.
     c.execute("""
@@ -294,18 +306,23 @@ def save_journal_entry(trade_id, followed_plan, outcome, moved_stop, better_entr
     conn.close()
 
 
-def log_risk(balance, equity, risk_status):
+def log_risk(balance, equity, risk_status, login=None, currency=None):
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        INSERT INTO risk_log (balance, equity, daily_dd, weekly_dd, consecutive_losses, trading_allowed)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO risk_log (
+            balance, equity, daily_dd, weekly_dd, consecutive_losses,
+            trading_allowed, login, currency
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         balance, equity,
         risk_status.get("daily_drawdown"),
         risk_status.get("weekly_drawdown"),
         risk_status.get("consecutive_losses"),
         1 if risk_status.get("allowed") else 0,
+        int(login) if login is not None else None,
+        currency,
     ))
     conn.commit()
     conn.close()
@@ -348,20 +365,32 @@ def get_recent_losses(n=5):
     return losses
 
 
-def get_equity_baseline(since):
+def get_equity_baseline(since, login=None, currency=None):
     """Earliest equity recorded at/after `since` (UTC string).
 
     Used as the daily/weekly drawdown baseline so restarting the scanner does
-    not reset (and therefore bypass) the risk limits.
+    not reset (and therefore bypass) the risk limits. When ``login`` is given,
+    only rows from that account are considered, so switching accounts (for
+    example from an IDR account to a USD one) never compares equity across
+    currencies. Legacy rows without a login are ignored in that case.
     """
+    where = "logged_at >= ? AND equity IS NOT NULL"
+    params = [since]
+    if login is not None:
+        where += " AND login = ?"
+        params.append(int(login))
+    if currency:
+        where += " AND currency = ?"
+        params.append(currency)
+
     conn = get_connection()
     c = conn.cursor()
-    c.execute("""
+    c.execute(f"""
         SELECT equity FROM risk_log
-        WHERE logged_at >= ? AND equity IS NOT NULL
+        WHERE {where}
         ORDER BY logged_at ASC, id ASC
         LIMIT 1
-    """, (since,))
+    """, tuple(params))
     row = c.fetchone()
     conn.close()
     return float(row["equity"]) if row else None

@@ -183,9 +183,17 @@ def scan_once(risk_manager: RiskManager):
 
     balance = account.get("balance", 0)
     equity = account.get("equity", balance)
-    risk_status = risk_manager.check_risk(balance, equity)
+    risk_status = risk_manager.check_risk(
+        balance, equity,
+        login=account.get("login"),
+        currency=account.get("currency"),
+    )
     try:
-        log_risk(balance, equity, risk_status)
+        log_risk(
+            balance, equity, risk_status,
+            login=account.get("login"),
+            currency=account.get("currency"),
+        )
     except Exception:
         # A transient DB failure must not block the scan.
         log.exception("Could not write risk log")

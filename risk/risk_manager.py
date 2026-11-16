@@ -28,22 +28,30 @@ class RiskManager:
         self._daily_start = None
         self._weekly_start = None
 
-    def _refresh_baselines(self, equity):
+    def _refresh_baselines(self, equity, login=None, currency=None):
         day_key, week_key = _period_starts()
-        if self._daily_key != day_key:
-            self._daily_key = day_key
-            self._daily_start = get_equity_baseline(day_key)
-        if self._weekly_key != week_key:
-            self._weekly_key = week_key
-            self._weekly_start = get_equity_baseline(week_key)
-        # First check of a new day/week: current equity is the baseline.
+        # Include the account in the key: switching login/currency mid-process
+        # must reload the baseline instead of comparing against the old account
+        # (e.g. an IDR balance vs a USD balance).
+        account_key = (login, currency)
+        if self._daily_key != (day_key, account_key):
+            self._daily_key = (day_key, account_key)
+            self._daily_start = get_equity_baseline(
+                day_key, login=login, currency=currency
+            )
+        if self._weekly_key != (week_key, account_key):
+            self._weekly_key = (week_key, account_key)
+            self._weekly_start = get_equity_baseline(
+                week_key, login=login, currency=currency
+            )
+        # First check of a new day/week/account: current equity is the baseline.
         if self._daily_start is None:
             self._daily_start = equity
         if self._weekly_start is None:
             self._weekly_start = equity
 
-    def check_risk(self, balance, equity):
-        self._refresh_baselines(equity)
+    def check_risk(self, balance, equity, login=None, currency=None):
+        self._refresh_baselines(equity, login=login, currency=currency)
 
         violations = []
         warnings = []
@@ -84,6 +92,8 @@ class RiskManager:
             "consecutive_losses": consec_losses,
             "daily_start": self._daily_start,
             "weekly_start": self._weekly_start,
+            "login": login,
+            "currency": currency,
         }
 
     def calculate_position_size(self, account_balance, entry, sl, symbol=None,
