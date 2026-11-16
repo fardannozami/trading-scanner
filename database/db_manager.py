@@ -596,6 +596,19 @@ def set_alert_cooldown(key, when):
     conn.close()
 
 
+def clear_alert_cooldowns(symbol):
+    """Drop every persisted cooldown for `symbol` (keys are ``SYMBOL_GRADE``).
+
+    Called when a position closes so the next signal alerts immediately
+    instead of waiting out the old cooldown window.
+    """
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM alert_cooldowns WHERE key GLOB ?", (f"{symbol}_*",))
+    conn.commit()
+    conn.close()
+
+
 def _parse_db_datetime(value):
     if not value:
         return None

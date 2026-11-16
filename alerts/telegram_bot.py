@@ -146,6 +146,10 @@ def send_live_close(event):
         f"Exit <code>{trade.get('exit_price')}</code>\n"
     )
     msg += f"Result: {profit_icon} <b>{profit:+.2f}</b>\n"
+    msg += (
+        f"\n🔔 <b>{escape(str(trade.get('symbol', '?')))}</b> alerts re-armed — "
+        f"new entry allowed."
+    )
     return send_message(msg)
 
 
@@ -193,6 +197,10 @@ def send_paper_close(event):
             f"Profit factor <b>{(stats.get('profit_factor') or 0):.2f}</b>"
         )
 
+    msg += (
+        f"\n\n🔔 <b>{escape(str(trade.get('symbol', '?')))}</b> alerts re-armed — "
+        f"new entry allowed."
+    )
     return send_message(msg)
 
 

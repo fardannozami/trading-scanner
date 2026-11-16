@@ -36,6 +36,9 @@ from database.db_manager import (
     log_risk,
     get_alert_cooldown,
     set_alert_cooldown,
+    clear_alert_cooldowns,
+    get_open_live_trades,
+    get_open_paper_trades,
 )
 
 logging.basicConfig(
@@ -50,6 +53,8 @@ log = logging.getLogger(__name__)
 
 _alerted: dict[str, datetime] = {}
 _digits_cache: dict[str, int] = {}
+
+GRADE_RANK = {"Standard": 0, "A": 1, "A+": 2, "ELITE": 3}
 
 
 def _cooldown_ok(key: str, minutes: int | None = None) -> bool:
@@ -124,6 +129,53 @@ def _symbol_digits(symbol):
     return _digits_cache.get(symbol)
 
 
+def _rearm_symbol(symbol):
+    """Clear cooldowns so a closed position unblocks the next alert at once."""
+    if not symbol:
+        return
+    prefix = f"{symbol}_"
+    for key in [k for k in _alerted if k.startswith(prefix)]:
+        _alerted.pop(key, None)
+    try:
+        clear_alert_cooldowns(symbol)
+    except Exception:
+        log.exception("Could not clear alert cooldowns for %s", symbol)
+
+
+def _position_direction(analysis):
+    bias = analysis.get("bias")
+    if bias == "bullish":
+        return "buy"
+    if bias == "bearish":
+        return "sell"
+    return None
+
+
+def _open_position(symbol):
+    """The open paper or live position for `symbol`, if there is one."""
+    try:
+        positions = get_open_paper_trades() + get_open_live_trades()
+    except Exception:
+        log.exception("Could not read open positions for %s", symbol)
+        return None
+    return next((p for p in positions if p.get("symbol") == symbol), None)
+
+
+def _alert_allowed(open_position, analysis, scoring):
+    """Should a new entry alert fire while `open_position` is still open?
+
+    Duplicate entries in the same direction are suppressed unless the grade
+    improves (A → A+ → ELITE). A reversal means the previous setup is no longer
+    valid, so that alert is allowed.
+    """
+    direction = _position_direction(analysis)
+    if direction and direction != open_position.get("direction"):
+        return True
+    return GRADE_RANK.get(scoring.get("grade"), -1) > GRADE_RANK.get(
+        open_position.get("grade"), -1
+    )
+
+
 def _monitor_paper_trades():
     try:
         for event in monitor_open_trades():
@@ -136,6 +188,7 @@ def _monitor_paper_trades():
                 trade["strategy"], stats.get("win_rate", 0.0),
             )
             send_paper_close(event)
+            _rearm_symbol(trade.get("symbol"))
     except Exception:
         log.exception("Paper trade monitor failed")
 
@@ -150,6 +203,7 @@ def _sync_live_trades():
                 event.get("profit") or 0.0,
             )
             send_live_close(event)
+            _rearm_symbol(trade.get("symbol"))
     except Exception:
         log.exception("Live trade sync failed")
 
@@ -246,6 +300,17 @@ def scan_once(risk_manager: RiskManager):
                             f"Window: -{config.NEWS_BLOCK_MINUTES_BEFORE}m / +{config.NEWS_BLOCK_MINUTES_AFTER}m"
                         )
                     continue
+
+            # One entry alert at a time per symbol: while a position in the
+            # same direction is open, only a grade upgrade re-alerts.
+            position = _open_position(symbol)
+            if position and not _alert_allowed(position, analysis, scoring):
+                log.info(
+                    f"{symbol}: {grade} alert suppressed — "
+                    f"{position.get('direction')} position open "
+                    f"(grade {position.get('grade')})"
+                )
+                continue
 
             cooldown_key = f"{symbol}_{grade}"
             if not _cooldown_ok(cooldown_key):
