@@ -5,6 +5,38 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+ALERT_CHANNELS = tuple(
+    channel.strip().lower()
+    for channel in os.getenv("ALERT_CHANNELS", "telegram").split(",")
+    if channel.strip()
+)
+WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "http://127.0.0.1:8787").rstrip("/")
+WHATSAPP_SERVICE_TOKEN = os.getenv("WHATSAPP_SERVICE_TOKEN", "")
+WHATSAPP_RECIPIENT_JID = os.getenv("WHATSAPP_RECIPIENT_JID", "")
+WHATSAPP_PHONE = os.getenv("WHATSAPP_PHONE", "")
+WHATSAPP_SESSION_DB = os.getenv("WHATSAPP_SESSION_DB", "whatsmeow.db")
+WHATSAPP_LISTEN_ADDR = os.getenv("WHATSAPP_LISTEN_ADDR", "127.0.0.1:8787")
+TELEGRAM_PAIR_CODE_TTL_MINUTES = int(os.getenv("TELEGRAM_PAIR_CODE_TTL_MINUTES", "10"))
+TELEGRAM_PAIR_MAX_ATTEMPTS = int(os.getenv("TELEGRAM_PAIR_MAX_ATTEMPTS", "5"))
+
+if not ALERT_CHANNELS or any(c not in {"telegram", "whatsapp"} for c in ALERT_CHANNELS):
+    raise ValueError("ALERT_CHANNELS must be telegram, whatsapp, or telegram,whatsapp")
+if len(set(ALERT_CHANNELS)) != len(ALERT_CHANNELS):
+    raise ValueError("ALERT_CHANNELS contains duplicate channels")
+
+NOTIFICATION_CHANNELS = ALERT_CHANNELS
+
+
+def channel_enabled(channel):
+    return channel in NOTIFICATION_CHANNELS
+
+
+def validate_whatsapp_service_token():
+    if channel_enabled("whatsapp") and not WHATSAPP_SERVICE_TOKEN:
+        raise ValueError("WHATSAPP_SERVICE_TOKEN is required when WhatsApp notifications are enabled")
+
+
+validate_whatsapp_service_token() if channel_enabled("whatsapp") else None
 
 MT5_LOGIN = int(os.getenv("MT5_LOGIN", "0"))
 MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")

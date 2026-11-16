@@ -1,8 +1,8 @@
 import logging
-import requests
 from html import escape
 
 import config
+from alerts.dispatcher import send_text, send_photo as dispatch_photo
 
 log = logging.getLogger(__name__)
 
@@ -18,32 +18,12 @@ STAGE_HEADERS = {
 BIAS_EMOJI = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪"}
 
 
-def _post(method, **kwargs):
-    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/{method}"
-    try:
-        r = requests.post(url, timeout=15, **kwargs)
-        r.raise_for_status()
-        return True
-    except Exception as e:
-        log.warning("[Telegram] %s error: %s", method, e)
-        return False
-
-
 def send_message(text):
-    return _post("sendMessage", json={
-        "chat_id": config.TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-    })
+    return send_text(text, parse_mode="HTML")
 
 
 def send_photo(photo_path, caption=""):
-    with open(photo_path, "rb") as f:
-        return _post("sendPhoto", data={
-            "chat_id": config.TELEGRAM_CHAT_ID,
-            "caption": caption[:1024],
-            "parse_mode": "HTML",
-        }, files={"photo": f})
+    return dispatch_photo(photo_path, caption)
 
 
 def format_alert(symbol, analysis, scoring, alert_stage="setup_developing",

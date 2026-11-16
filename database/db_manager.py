@@ -236,6 +236,32 @@ def init_db():
         )
     """)
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS notification_pair_codes (
+            code_hash TEXT PRIMARY KEY,
+            channel TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            consumed_at TIMESTAMP
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS telegram_targets (
+            chat_id TEXT PRIMARY KEY,
+            chat_type TEXT NOT NULL,
+            paired_by TEXT,
+            paired_at TIMESTAMP NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS notification_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -394,6 +420,121 @@ def get_equity_baseline(since, login=None, currency=None):
     row = c.fetchone()
     conn.close()
     return float(row["equity"]) if row else None
+
+
+def create_notification_pair_code(code_hash, channel, expires_at):
+    now = utc_timestamp()
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE notification_pair_codes SET consumed_at = ? WHERE consumed_at IS NULL AND expires_at <= ?", (now, now))
+        conn.execute("""
+            INSERT INTO notification_pair_codes (
+                code_hash, channel, created_at, expires_at, attempts
+            ) VALUES (?, ?, ?, ?, 0)
+        """, (code_hash, channel, now, expires_at))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def consume_telegram_pair_code(code_hash, chat_id, chat_type, paired_by,
+                               max_attempts=5):
+    """Atomically consume an unexpired Telegram code and activate its target."""
+    now = utc_timestamp()
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("""
+            SELECT channel, expires_at, attempts, consumed_at
+            FROM notification_pair_codes WHERE code_hash = ?
+        """, (code_hash,)).fetchone()
+        if not row or row["channel"] != "telegram" or row["consumed_at"]:
+            conn.rollback()
+            return False
+        if row["expires_at"] <= now or row["attempts"] >= max_attempts:
+            conn.execute("UPDATE notification_pair_codes SET consumed_at = ? WHERE code_hash = ?", (now, code_hash))
+            conn.commit()
+            return False
+        conn.execute("UPDATE notification_pair_codes SET consumed_at = ?, attempts = attempts + 1 WHERE code_hash = ?", (now, code_hash))
+        conn.execute("""
+            INSERT INTO telegram_targets (chat_id, chat_type, paired_by, paired_at, active)
+            VALUES (?, ?, ?, ?, 1)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                chat_type = excluded.chat_type,
+                paired_by = excluded.paired_by,
+                paired_at = excluded.paired_at,
+                active = 1
+        """, (str(chat_id), chat_type, str(paired_by), now))
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def increment_pair_attempt(code_hash, max_attempts=5):
+    now = utc_timestamp()
+    conn = get_connection()
+    try:
+        conn.execute("""
+            UPDATE notification_pair_codes
+            SET attempts = attempts + 1,
+                consumed_at = CASE WHEN attempts + 1 >= ? THEN ? ELSE consumed_at END
+            WHERE code_hash = ? AND consumed_at IS NULL AND expires_at > ?
+        """, (max_attempts, now, code_hash, now))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_telegram_targets():
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT chat_id, chat_type, paired_by, paired_at FROM telegram_targets "
+            "WHERE active = 1 ORDER BY paired_at ASC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def remove_telegram_target(chat_id):
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "UPDATE telegram_targets SET active = 0 WHERE chat_id = ? AND active = 1",
+            (str(chat_id),),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_notification_state(key):
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT value FROM notification_state WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row else None
+    finally:
+        conn.close()
+
+
+def set_notification_state(key, value):
+    conn = get_connection()
+    try:
+        conn.execute("""
+            INSERT INTO notification_state (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """, (key, str(value)))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_alert_cooldown(key):
