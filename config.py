@@ -48,3 +48,35 @@ PAPER_MAX_HOLD_HOURS = int(os.getenv("PAPER_MAX_HOLD_HOURS", "168"))
 # When false, a new signal is ignored while a position on the same symbol is
 # still open (per-strategy stats are still refreshed on every signal).
 PAPER_ALLOW_STACKING = os.getenv("PAPER_ALLOW_STACKING", "false").lower() == "true"
+
+# ─────────────────────────────────────────────
+# Live trading — REAL orders sent to MetaTrader 5.
+# Firing real orders needs three explicit opt-ins, so a single copy/paste of
+# an example .env can never accidentally trade a real account:
+#   1. LIVE_TRADING_ENABLED=true
+#   2. LIVE_TRADING_DRY_RUN=false
+#   3. LIVE_CONFIRMATION=YES
+# Anything less and the bot only validates and logs the intended order.
+# ─────────────────────────────────────────────
+LIVE_TRADING_ENABLED = os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true"
+LIVE_TRADING_DRY_RUN = os.getenv("LIVE_TRADING_DRY_RUN", "true").lower() == "true"
+LIVE_CONFIRMATION = os.getenv("LIVE_CONFIRMATION", "").strip().upper()
+LIVE_SEND_ORDERS = (
+    LIVE_TRADING_ENABLED
+    and not LIVE_TRADING_DRY_RUN
+    and LIVE_CONFIRMATION == "YES"
+)
+
+# Minimum setup grade that is allowed to become a real order.
+LIVE_MIN_GRADE = os.getenv("LIVE_MIN_GRADE", "A+")  # Standard / A / A+ / ELITE
+# "fixed" uses LIVE_FIXED_LOT; "risk" sizes from MAX_RISK_PER_TRADE.
+LIVE_LOT_MODE = os.getenv("LIVE_LOT_MODE", "risk").lower()
+LIVE_FIXED_LOT = float(os.getenv("LIVE_FIXED_LOT", "0.01"))
+LIVE_TP_LEVEL = os.getenv("LIVE_TP_LEVEL", "tp1").lower()  # "tp1" or "tp2"
+LIVE_MAGIC = int(os.getenv("LIVE_MAGIC", "20261116"))
+LIVE_DEVIATION = int(os.getenv("LIVE_DEVIATION", "20"))  # max slippage, points
+# Reject entries when the spread is wider than this (0 disables the check).
+LIVE_MAX_SPREAD_POINTS = float(os.getenv("LIVE_MAX_SPREAD_POINTS", "50"))
+LIVE_MAX_OPEN_POSITIONS = int(os.getenv("LIVE_MAX_OPEN_POSITIONS", "1"))
+LIVE_MAX_DAILY_TRADES = int(os.getenv("LIVE_MAX_DAILY_TRADES", "5"))
+LIVE_COMMENT = os.getenv("LIVE_COMMENT", "Scanner")

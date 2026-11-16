@@ -47,7 +47,7 @@ def send_photo(photo_path, caption=""):
 
 
 def format_alert(symbol, analysis, scoring, alert_stage="setup_developing",
-                 paper_trade=None):
+                 paper_trade=None, live_trade=None):
     from scanner.scoring_engine import GRADE_EMOJI
     bias = analysis.get("bias", "neutral")
     levels = analysis.get("levels") or {}
@@ -102,15 +102,70 @@ def format_alert(symbol, analysis, scoring, alert_stage="setup_developing",
         else:
             msg += "\n"
 
-    msg += "<i>Decision support only — manual execution required.</i>"
+    if live_trade:
+        if live_trade.get("ok"):
+            msg += (
+                f"🔴 <b>LIVE ORDER FILLED</b>: "
+                f"{escape(str(live_trade['direction']).upper())} "
+                f"{live_trade['lot']:.2f} lot @ <code>{live_trade['entry']}</code> "
+                f"(ticket #{live_trade.get('ticket')})\n"
+            )
+        elif live_trade.get("dry_run"):
+            msg += (
+                f"🧪 <b>Live dry-run</b>: would send "
+                f"{escape(str(live_trade['direction']).upper())} "
+                f"{live_trade['lot']:.2f} lot @ <code>{live_trade['entry']}</code> "
+                f"— no order sent\n"
+            )
+        else:
+            msg += (
+                f"⚠️ <b>Live order rejected</b>: retcode "
+                f"{live_trade.get('retcode')} — {escape(str(live_trade.get('comment') or ''))}\n"
+            )
+
+    if live_trade and live_trade.get("ok"):
+        msg += "<i>Live position is now open on your broker account.</i>"
+    else:
+        msg += "<i>Decision support only — manual execution required.</i>"
     return msg
 
 
 def send_alert(symbol, analysis, scoring, chart_path=None,
-               alert_stage="setup_developing", paper_trade=None):
-    msg = format_alert(symbol, analysis, scoring, alert_stage, paper_trade)
+               alert_stage="setup_developing", paper_trade=None,
+               live_trade=None):
+    msg = format_alert(
+        symbol, analysis, scoring, alert_stage, paper_trade, live_trade
+    )
     if chart_path:
         return send_photo(chart_path, caption=msg)
+    return send_message(msg)
+
+
+def send_live_close(event):
+    """Notify that a real position was closed by the broker."""
+    trade = event.get("trade") or {}
+    profit = event.get("profit") or 0.0
+
+    status = trade.get("status")
+    if status == "win":
+        header = "✅ LIVE TRADE CLOSED — PROFIT"
+    elif status == "loss":
+        header = "🛑 LIVE TRADE CLOSED — LOSS"
+    else:
+        header = "📄 LIVE TRADE CLOSED — BREAKEVEN"
+
+    profit_icon = "🟢" if profit >= 0 else "🔴"
+    msg = f"{header}\n\n"
+    msg += (
+        f"<b>{escape(str(trade.get('symbol', '?')))}</b> "
+        f"{escape(str(trade.get('direction', '')).upper())} "
+        f"{(trade.get('lot') or 0):.2f} lot · ticket #{trade.get('ticket')}\n"
+    )
+    msg += (
+        f"Entry <code>{trade.get('entry')}</code> → "
+        f"Exit <code>{trade.get('exit_price')}</code>\n"
+    )
+    msg += f"Result: {profit_icon} <b>{profit:+.2f}</b>\n"
     return send_message(msg)
 
 
@@ -186,4 +241,16 @@ def send_startup_message(symbols):
             f"\n\n📝 Paper trading: {config.PAPER_LOT:.2f} lot per signal "
             f"· TP target {config.PAPER_TP_LEVEL.upper()}"
         )
+    if config.LIVE_TRADING_ENABLED:
+        if config.LIVE_SEND_ORDERS:
+            msg += (
+                f"\n\n🔴 <b>LIVE TRADING ACTIVE</b> — real orders "
+                f"({config.LIVE_LOT_MODE} lot, min grade {config.LIVE_MIN_GRADE}, "
+                f"TP {config.LIVE_TP_LEVEL.upper()})"
+            )
+        else:
+            msg += (
+                "\n\n🧪 Live trading enabled in DRY-RUN only — "
+                "no real orders will be sent"
+            )
     return send_message(msg)

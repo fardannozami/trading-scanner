@@ -1,0 +1,1 @@
+- Writes in Indonesian and expects replies (explanations, summaries) in Indonesian. Confidence: 0.7

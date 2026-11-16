@@ -108,6 +108,10 @@ def get_symbol_info(symbol):
         return {}
     try:
         info = mt5.symbol_info(symbol)
+        # The symbol must be in Market Watch before orders can be sent.
+        if info is not None and not info.visible:
+            mt5.symbol_select(symbol, True)
+            info = mt5.symbol_info(symbol) or info
     except Exception:
         return {}
     if info is None:
@@ -115,6 +119,7 @@ def get_symbol_info(symbol):
     return {
         "digits": info.digits,
         "point": info.point,
+        "spread": info.spread,
         "trade_contract_size": info.trade_contract_size,
         "trade_tick_size": info.trade_tick_size,
         "trade_tick_value": info.trade_tick_value,
@@ -122,6 +127,114 @@ def get_symbol_info(symbol):
         "volume_min": info.volume_min,
         "volume_max": info.volume_max,
         "volume_step": info.volume_step,
+        "filling_mode": info.filling_mode,
+        "trade_stops_level": info.trade_stops_level,
+        "trade_mode": info.trade_mode,
+    }
+
+
+def get_tick(symbol):
+    """Latest bid/ask for a symbol ({} when unavailable)."""
+    if not MT5_AVAILABLE:
+        return {}
+    try:
+        tick = mt5.symbol_info_tick(symbol)
+    except Exception:
+        return {}
+    if tick is None:
+        return {}
+    return {
+        "bid": tick.bid,
+        "ask": tick.ask,
+        "time": tick.time,
+        "spread": tick.ask - tick.bid,
+    }
+
+
+def get_positions(symbol=None, magic=None):
+    """Open positions, optionally filtered by symbol and/or magic number."""
+    if not MT5_AVAILABLE:
+        return []
+    try:
+        positions = (
+            mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
+        )
+    except Exception:
+        return []
+    if positions is None:
+        return []
+    result = []
+    for p in positions:
+        if magic is not None and p.magic != magic:
+            continue
+        result.append({
+            "ticket": p.ticket,
+            "symbol": p.symbol,
+            "type": p.type,
+            "volume": p.volume,
+            "price_open": p.price_open,
+            "price_current": p.price_current,
+            "sl": p.sl,
+            "tp": p.tp,
+            "profit": p.profit,
+            "magic": p.magic,
+            "comment": p.comment,
+            "time": p.time,
+        })
+    return result
+
+
+def get_position_deals(position_ticket):
+    """All deals belonging to a position ticket (used to summarise a close)."""
+    if not MT5_AVAILABLE:
+        return []
+    try:
+        deals = mt5.history_deals_get(position=int(position_ticket))
+    except Exception:
+        deals = None
+    if not deals:
+        return []
+    result = []
+    for d in deals:
+        result.append({
+            "ticket": d.ticket,
+            "entry": d.entry,  # 0=in, 1=out
+            "price": d.price,
+            "profit": d.profit,
+            "swap": d.swap,
+            "commission": d.commission,
+            "time": d.time,
+            "position_id": d.position_id,
+        })
+    return result
+
+
+def send_order(request):
+    """Submit a trade request.
+
+    Returns {"ok", "retcode", "comment", "result"}. ``ok`` is True only for
+    TRADE_RETCODE_DONE / TRADE_RETCODE_PLACED.
+    """
+    if not MT5_AVAILABLE:
+        return {
+            "ok": False, "retcode": None,
+            "comment": "MetaTrader5 package not available", "result": None,
+        }
+    try:
+        result = mt5.order_send(request)
+    except Exception as exc:
+        return {"ok": False, "retcode": None, "comment": str(exc), "result": None}
+    if result is None:
+        return {
+            "ok": False, "retcode": None,
+            "comment": str(mt5.last_error()), "result": None,
+        }
+    ok = result.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED)
+    return {
+        "ok": ok,
+        "retcode": result.retcode,
+        "comment": result.comment,
+        "result": result,
     }
 
 

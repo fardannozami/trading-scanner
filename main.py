@@ -21,12 +21,14 @@ from scanner.news_filter import (
 )
 from alerts.telegram_bot import (
     send_alert,
+    send_live_close,
     send_message,
     send_paper_close,
     send_risk_alert,
     send_startup_message,
 )
 from paper.paper_trader import monitor_open_trades, open_from_signal
+from execution.live_trader import open_live_trade, sync_live_trades
 from risk.risk_manager import RiskManager
 from database.db_manager import (
     init_db,
@@ -138,6 +140,20 @@ def _monitor_paper_trades():
         log.exception("Paper trade monitor failed")
 
 
+def _sync_live_trades():
+    try:
+        for event in sync_live_trades():
+            trade = event["trade"]
+            log.warning(
+                "Live trade #%s closed: %s %s (%+.2f)",
+                trade["id"], trade["symbol"], trade.get("status"),
+                event.get("profit") or 0.0,
+            )
+            send_live_close(event)
+    except Exception:
+        log.exception("Live trade sync failed")
+
+
 def determine_stage(scoring, analysis) -> str:
     grade = scoring.get("grade")
     conditions = analysis.get("conditions", [])
@@ -156,6 +172,9 @@ def scan_once(risk_manager: RiskManager):
 
     # Track virtual positions even if risk rules currently block new alerts.
     _monitor_paper_trades()
+
+    # Reconcile real positions with the broker (SL/TP hits, manual closes).
+    _sync_live_trades()
 
     account = get_account_info()
     if not account:
@@ -236,10 +255,22 @@ def scan_once(risk_manager: RiskManager):
             except Exception:
                 # Never let paper-trade bookkeeping block a real alert.
                 log.exception("Paper trade open failed for %s", symbol)
+
+            live_trade = None
+            if config.LIVE_TRADING_ENABLED:
+                try:
+                    live_trade = open_live_trade(
+                        symbol, analysis, scoring, risk_manager,
+                        setup_id=setup_id, timeframe=config.LTF,
+                    )
+                except Exception:
+                    # Execution errors must not crash the scan loop.
+                    log.exception("Live trade execution failed for %s", symbol)
+
             stage = determine_stage(scoring, analysis)
             send_alert(
                 symbol, analysis, scoring, chart_path, stage,
-                paper_trade=paper_trade,
+                paper_trade=paper_trade, live_trade=live_trade,
             )
             log.info(f"Alert sent — {symbol} {grade} (score {score}) stage={stage}")
 
@@ -250,6 +281,20 @@ def scan_once(risk_manager: RiskManager):
 def main():
     log.info("Trading Scanner initialising...")
     init_db()
+
+    if config.LIVE_TRADING_ENABLED:
+        if config.LIVE_SEND_ORDERS:
+            log.warning(
+                "LIVE TRADING ACTIVE — real orders will be sent to MT5 "
+                "(min grade %s, %s lot mode)",
+                config.LIVE_MIN_GRADE, config.LIVE_LOT_MODE,
+            )
+        else:
+            log.warning(
+                "Live trading enabled but NOT armed (dry-run=%s, confirmation=%s) "
+                "— orders will only be logged",
+                config.LIVE_TRADING_DRY_RUN, "ok" if config.LIVE_CONFIRMATION == "YES" else "missing",
+            )
 
     try:
         connect()

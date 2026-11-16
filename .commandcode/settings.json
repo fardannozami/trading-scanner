@@ -7,7 +7,10 @@
       "Shell(dir /b /s venv .venv env 2>nul)",
       "Shell(.venvScriptspython.exe:*)",
       "Shell(tasklist:*)",
-      "Shell(set:*)"
+      "Shell(set:*)",
+      "Shell(python -m py_compile config.py main.py scanner/mt5_connector.py database/db_manager.py alerts/telegram_bot.py paper/paper_trader.py execution/live_trader.py risk/risk_manager.py)",
+      "Shell(python \"C:\\Users\\Xcode\\AppData\\Local\\Temp\\commandcode\\D--coding-python-trading-scanner\\e13a85ac-d498-4ee5-a4d2-7cd9c8637f0a\\scratchpad\\smoke.py\")",
+      "Shell(python -c import sys; print(sys.executable))"
     ],
     "deny": [],
     "defaultMode": "default"

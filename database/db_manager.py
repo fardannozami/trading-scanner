@@ -165,6 +165,45 @@ def init_db():
         )
     """)
 
+    # Real orders actually submitted to MetaTrader 5. paper_trades keeps the
+    # virtual record; this table records what the broker accepted.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS live_trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket INTEGER UNIQUE,
+            order_ticket INTEGER,
+            setup_id INTEGER,
+            symbol TEXT NOT NULL,
+            strategy TEXT,
+            direction TEXT,
+            grade TEXT,
+            score INTEGER,
+            lot REAL,
+            entry REAL,
+            requested_price REAL,
+            sl REAL,
+            tp REAL,
+            magic INTEGER,
+            retcode INTEGER,
+            status TEXT NOT NULL DEFAULT 'open',
+            exit_price REAL,
+            profit REAL,
+            opened_at TIMESTAMP,
+            closed_at TIMESTAMP,
+            comment TEXT,
+            raw TEXT,
+            FOREIGN KEY (setup_id) REFERENCES setups(id)
+        )
+    """)
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_live_status
+        ON live_trades(status)
+    """)
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_live_opened
+        ON live_trades(opened_at)
+    """)
+
     # Last alert time per symbol/grade. Persisted so restarting the scanner
     # does not re-send alerts that are still inside their cooldown window.
     c.execute("""
@@ -275,7 +314,7 @@ def log_risk(balance, equity, risk_status):
 def get_recent_losses(n=5):
     """Return the most recent losses, stopping at the first non-loss.
 
-    Reads both manual `trades` and the virtual `paper_trades` table: the
+    Reads manual `trades`, virtual `paper_trades` and real `live_trades`: the
     scanner never writes to `trades`, so relying on it alone kept the
     consecutive-loss rule from ever triggering.
     """
@@ -290,6 +329,10 @@ def get_recent_losses(n=5):
             SELECT status, closed_at, id
             FROM paper_trades
             WHERE status IS NOT NULL AND status != 'open'
+            UNION ALL
+            SELECT status, closed_at, id
+            FROM live_trades
+            WHERE status IN ('win', 'loss', 'breakeven')
         )
         ORDER BY closed_at DESC, id DESC
         LIMIT ?
@@ -735,4 +778,113 @@ def get_paper_period_stats(since_date=None):
         row[key] = row[key] or 0
     row["total_r"] = round(row["total_r"] or 0.0, 2)
     row["total_pnl"] = round(row["total_pnl"] or 0.0, 2)
+    return row
+
+
+# ─────────────────────────────────────────────
+# Live trades (real orders submitted to MT5)
+# ─────────────────────────────────────────────
+
+def create_live_trade(symbol, direction, lot, entry, sl, tp, status="open",
+                      ticket=None, order_ticket=None, strategy=None, grade=None,
+                      score=None, setup_id=None, magic=None, retcode=None,
+                      requested_price=None, comment=None, raw=None):
+    """Record a real order. Returns the new row id."""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO live_trades (
+            ticket, order_ticket, setup_id, symbol, strategy, direction, grade,
+            score, lot, entry, requested_price, sl, tp, magic, retcode, status,
+            opened_at, comment, raw
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        ticket, order_ticket, setup_id, symbol, strategy, direction, grade,
+        score, lot, entry, requested_price, sl, tp, magic, retcode, status,
+        utc_timestamp(), comment, raw,
+    ))
+    trade_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return trade_id
+
+
+def get_live_trade(trade_id):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM live_trades WHERE id = ?", (trade_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_open_live_trades():
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM live_trades WHERE status = 'open' ORDER BY opened_at ASC")
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_live_trades(limit=200):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM live_trades ORDER BY id DESC LIMIT ?", (limit,))
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def close_live_trade(trade_id, exit_price, profit, status):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        UPDATE live_trades
+        SET exit_price = ?, profit = ?, status = ?, closed_at = ?
+        WHERE id = ? AND status = 'open'
+    """, (exit_price, profit, status, utc_timestamp(), trade_id))
+    updated = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def count_live_trades_since(since_date=None):
+    """Number of real orders opened on/after a date (daily trade cap).
+
+    Rejected orders (status='error') never became trades, so they do not count.
+    """
+    since = (since_date or date.today()).isoformat()
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT COUNT(*) AS n FROM live_trades "
+        "WHERE DATE(opened_at) >= ? AND status != 'error'",
+        (since,),
+    )
+    row = c.fetchone()
+    conn.close()
+    return int(row["n"] or 0)
+
+
+def get_live_overall_stats():
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        SELECT COUNT(*) AS total,
+               SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_trades,
+               SUM(CASE WHEN status = 'win' THEN 1 ELSE 0 END) AS wins,
+               SUM(CASE WHEN status = 'loss' THEN 1 ELSE 0 END) AS losses,
+               SUM(CASE WHEN status = 'breakeven' THEN 1 ELSE 0 END) AS breakeven,
+               SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
+               SUM(CASE WHEN status NOT IN ('open', 'error') THEN COALESCE(profit, 0) ELSE 0 END) AS total_profit
+        FROM live_trades
+    """)
+    row = dict(c.fetchone())
+    conn.close()
+    for key in ("total", "open_trades", "wins", "losses", "breakeven", "errors"):
+        row[key] = row[key] or 0
+    row["total_profit"] = round(row["total_profit"] or 0.0, 2)
     return row

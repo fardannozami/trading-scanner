@@ -95,6 +95,46 @@ condition list is stored per trade for deeper analysis. Win rate is
 one position per symbol can be open at a time (`PAPER_ALLOW_STACKING=false`),
 and alert cooldowns persist across scanner restarts.
 
+### Live Trading (real orders)
+
+When armed, a qualifying signal is also sent to MetaTrader 5 as a **real market
+order** with SL/TP attached. Live execution is off by default and requires
+three separate opt-ins, so copying the example `.env` can never trade a live
+account:
+
+```env
+LIVE_TRADING_ENABLED=true
+LIVE_TRADING_DRY_RUN=false
+LIVE_CONFIRMATION=YES
+```
+
+Anything less (for example `LIVE_TRADING_ENABLED=true` with the default
+dry-run) only validates and logs the intended order — nothing is sent.
+
+Each order passes these gates first:
+
+- Signal levels are valid (`SL < price < TP` for longs, mirrored for shorts).
+- Grade is at least `LIVE_MIN_GRADE` (default `A+`).
+- Symbol is tradeable in that direction, spread is within
+  `LIVE_MAX_SPREAD_POINTS`, and SL/TP respect the broker's minimum stop level.
+- Daily trade cap (`LIVE_MAX_DAILY_TRADES`) and open-position cap
+  (`LIVE_MAX_OPEN_POSITIONS`, default one position per symbol) are respected.
+- Volume is normalised to the broker's `volume_min` / `volume_max` /
+  `volume_step`; sizing is either risk-based (`LIVE_LOT_MODE=risk`, from
+  `MAX_RISK_PER_TRADE`) or fixed (`LIVE_FIXED_LOT`).
+
+The order uses `LIVE_MAGIC` so live positions are distinguishable from manual
+trades. Filling mode is auto-negotiated (FOK → IOC → RETURN) from the symbol's
+reported capabilities. Every accepted, rejected and dry-run order is stored in
+the `live_trades` table, and open rows are reconciled each scan: when the broker
+closes a position at SL/TP, the exit price and realised profit are written back
+and a Telegram notification is sent. Real losses also count toward the
+consecutive-loss rule.
+
+> Real orders bypass the paper-trade simulation entirely — the broker fills at
+> market, not at the signal's historical entry. Use `LIVE_TRADING_DRY_RUN=true`
+> on a demo account to verify the wiring before arming a live one.
+
 ### Risk Management Constitution
 
 Automatically suspends alerts when limits are breached:
@@ -159,6 +199,8 @@ trading-scanner/
 │   └── telegram_bot.py        # Telegram message and photo sending
 ├── paper/
 │   └── paper_trader.py        # Virtual positions + SL/TP tracking
+├── execution/
+│   └── live_trader.py         # Real MT5 order execution + reconciliation
 ├── risk/
 │   └── risk_manager.py        # Constitution rules enforcement + lot sizing
 ├── database/
@@ -259,6 +301,18 @@ All values are read from `.env` (see `.env.example` for a template).
 | `PAPER_TP_LEVEL` | `tp1` | Exit target: `tp1` (2R) or `tp2` (3R) |
 | `PAPER_MAX_HOLD_HOURS` | `168` | Close open paper trades after N hours (0 = never) |
 | `PAPER_ALLOW_STACKING` | `false` | Allow multiple open trades per symbol |
+| `LIVE_TRADING_ENABLED` | `false` | Enable live execution (order sending) |
+| `LIVE_TRADING_DRY_RUN` | `true` | Log the intended order without sending it |
+| `LIVE_CONFIRMATION` | _(empty)_ | Must be `YES` together with the two flags above to send real orders |
+| `LIVE_MIN_GRADE` | `A+` | Lowest grade allowed to become a real order |
+| `LIVE_LOT_MODE` | `risk` | `risk` (from `MAX_RISK_PER_TRADE`) or `fixed` |
+| `LIVE_FIXED_LOT` | `0.01` | Lot size when `LIVE_LOT_MODE=fixed` |
+| `LIVE_TP_LEVEL` | `tp1` | Real-order exit target: `tp1` or `tp2` |
+| `LIVE_MAGIC` | `20261116` | Magic number stamped on live orders |
+| `LIVE_DEVIATION` | `20` | Max slippage in points |
+| `LIVE_MAX_SPREAD_POINTS` | `50` | Skip entries when spread exceeds this (0 = off) |
+| `LIVE_MAX_OPEN_POSITIONS` | `1` | Max simultaneous live positions |
+| `LIVE_MAX_DAILY_TRADES` | `5` | Max live orders per day |
 | `DB_PATH` | `trading_scanner.db` | SQLite database file path |
 
 ---
