@@ -60,6 +60,69 @@ Each setup is dynamically scored (max **14 points**) and graded:
 | 🥇 A+ | 10 | High-probability |
 | 💎 Elite | 12 | All conditions confirmed |
 
+### Notification Channels and Pairing
+
+`ALERT_CHANNELS` routes every outbound notification to `telegram`, `whatsapp`, or
+`telegram,whatsapp` (default: Telegram). A failure in one provider is logged and
+does not prevent delivery through the other provider or stop the scanner.
+Telegram receives chart photos; WhatsApp currently receives the text caption.
+
+#### Pair a Telegram private chat or group
+
+Optionally set `TELEGRAM_BOT_USERNAME` (without `@`) so the listener can ignore
+commands explicitly addressed to another bot. Start the separate long-polling
+listener in its own terminal (only one listener may use this bot token):
+
+```bash
+python -m alerts.telegram_listener
+```
+
+Issue a one-time 8-digit pairing code locally:
+
+```bash
+python -m alerts.pairing issue telegram
+```
+
+Send `/pair CODE` to the bot from the private chat, or from the target group as a
+group administrator. Codes expire after `TELEGRAM_PAIR_CODE_TTL_MINUTES` and
+pairing attempts are rate-limited. Manage linked chats with:
+
+```bash
+python -m alerts.pairing list
+python -m alerts.pairing remove CHAT_ID
+```
+
+When at least one paired chat exists, paired chats take precedence over the
+legacy `TELEGRAM_CHAT_ID` fallback.
+
+#### Pair WhatsApp with whatsmeow
+
+Install Go 1.26 or newer, then build/run the independent local service from the
+repository root (it binds to localhost and requires a shared secret):
+
+```bash
+go -C whatsapp_service mod tidy
+go -C whatsapp_service run ./cmd/whatsappd
+```
+
+Set `ALERT_CHANNELS=whatsapp` or `ALERT_CHANNELS=telegram,whatsapp`, generate a
+long random `WHATSAPP_SERVICE_TOKEN`, and configure `WHATSAPP_PHONE` in
+international format plus `WHATSAPP_RECIPIENT_JID`. A private JID looks like
+`6281234567890@s.whatsapp.net`; a group JID ends with `@g.us`.
+
+Request a WhatsApp Linked Devices pairing code and check connectivity with:
+
+```bash
+python -m alerts.whatsapp_admin pair
+python -m alerts.whatsapp_admin status
+```
+
+Enter the returned code in WhatsApp → Linked devices → Link a device → Link with
+phone number instead. The linking code expires quickly (about 160 seconds). The
+WhatsApp session is persisted in `WHATSAPP_SESSION_DB`; treat this DB and the
+service token as credentials. WhatsApp transport and recipient JID are
+independent from Telegram pairing.
+
 ### Telegram Alerts
 
 Progressive staged alerts sent with chart screenshots:
@@ -196,7 +259,14 @@ trading-scanner/
 │   ├── chart_generator.py     # Dark-theme candlestick charts (mplfinance)
 │   └── news_filter.py         # ForexFactory calendar + blackout logic
 ├── alerts/
-│   └── telegram_bot.py        # Telegram message and photo sending
+│   ├── telegram_bot.py        # Notification formatting and provider wrappers
+│   ├── dispatcher.py          # Telegram/WhatsApp channel routing
+│   ├── telegram_listener.py   # Telegram pairing listener
+│   ├── pairing.py             # One-time Telegram pair code CLI
+│   └── whatsapp_admin.py      # WhatsApp pair/status CLI
+├── whatsapp_service/
+│   ├── cmd/whatsappd/          # Separate Go whatsmeow service
+│   └── go.mod
 ├── paper/
 │   └── paper_trader.py        # Virtual positions + SL/TP tracking
 ├── execution/
@@ -282,6 +352,15 @@ All values are read from `.env` (see `.env.example` for a template).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `ALERT_CHANNELS` | `telegram` | Outbound channels: `telegram`, `whatsapp`, or `telegram,whatsapp` |
+| `TELEGRAM_PAIR_CODE_TTL_MINUTES` | `10` | Lifetime of a Telegram chat pairing code |
+| `TELEGRAM_PAIR_MAX_ATTEMPTS` | `5` | Pairing attempts per chat/sender per time window |
+| `WHATSAPP_SERVICE_URL` | `http://127.0.0.1:8787` | Local whatsmeow service address |
+| `WHATSAPP_SERVICE_TOKEN` | _(empty)_ | Shared secret required by the local Go service |
+| `WHATSAPP_LISTEN_ADDR` | `127.0.0.1:8787` | Address for the Go service (keep on localhost) |
+| `WHATSAPP_PHONE` | _(empty)_ | Sender phone in international format for Linked Devices pairing |
+| `WHATSAPP_RECIPIENT_JID` | _(empty)_ | WhatsApp private or group JID receiving alerts |
+| `WHATSAPP_SESSION_DB` | `whatsmeow.db` | Persistent whatsmeow device/session database |
 | `SCAN_INTERVAL` | `60` | Seconds between scans |
 | `ALERT_COOLDOWN_MINUTES` | `60` | Min minutes between repeat alerts per symbol/grade |
 | `MAX_RISK_PER_TRADE` | `1.0` | % of account per trade |

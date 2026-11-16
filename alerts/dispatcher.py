@@ -1,5 +1,6 @@
 import logging
 import re
+from html import unescape
 
 import requests
 
@@ -36,9 +37,9 @@ def _send_telegram_text(text, parse_mode="HTML"):
             response.raise_for_status()
             if not response.json().get("ok"):
                 raise RuntimeError("Telegram API returned ok=false")
-        except Exception:
+        except Exception as exc:
             ok = False
-            log.exception("Telegram delivery failed for a paired chat")
+            log.warning("Telegram delivery failed (%s)", type(exc).__name__)
     return ok
 
 
@@ -63,9 +64,9 @@ def _send_telegram_photo(photo_path, caption=""):
             response.raise_for_status()
             if not response.json().get("ok"):
                 raise RuntimeError("Telegram API returned ok=false")
-        except Exception:
+        except Exception as exc:
             ok = False
-            log.exception("Telegram photo delivery failed for a paired chat")
+            log.warning("Telegram photo delivery failed (%s)", type(exc).__name__)
     return ok
 
 
@@ -77,13 +78,21 @@ def _send_whatsapp(text):
         response = requests.post(
             f"{config.WHATSAPP_SERVICE_URL}/send",
             headers={"Authorization": f"Bearer {config.WHATSAPP_SERVICE_TOKEN}"},
-            json={"jid": config.WHATSAPP_RECIPIENT_JID, "text": _TAG_RE.sub("", text)},
+            json={"jid": config.WHATSAPP_RECIPIENT_JID, "text": unescape(_TAG_RE.sub("", text))},
             timeout=20,
         )
         response.raise_for_status()
         return True
-    except Exception:
-        log.exception("WhatsApp notification delivery failed")
+    except Exception as exc:
+        log.warning("WhatsApp notification delivery failed (%s)", type(exc).__name__)
+        return False
+
+
+def _try_delivery(channel, sender, *args):
+    try:
+        return bool(sender(*args))
+    except Exception as exc:
+        log.warning("Notification delivery failed for %s (%s)", channel, type(exc).__name__)
         return False
 
 
@@ -91,17 +100,20 @@ def send_text(text, parse_mode="HTML"):
     results = []
     for channel in config.NOTIFICATION_CHANNELS:
         if channel == "telegram":
-            results.append(_send_telegram_text(text, parse_mode))
+            results.append(_try_delivery(channel, _send_telegram_text, text, parse_mode))
         elif channel == "whatsapp":
-            results.append(_send_whatsapp(text))
-    return all(results) if results else False
+            results.append(_try_delivery(channel, _send_whatsapp, text))
+    return any(results)
 
 
 def send_photo(photo_path, caption=""):
     results = []
     for channel in config.NOTIFICATION_CHANNELS:
         if channel == "telegram":
-            results.append(_send_telegram_photo(photo_path, caption))
+            results.append(_try_delivery(channel, _send_telegram_photo, photo_path, caption))
         elif channel == "whatsapp":
-            results.append(_send_whatsapp(caption or "Trading scanner update (chart not attached)."))
-    return all(results) if results else False
+            results.append(_try_delivery(
+                channel, _send_whatsapp,
+                caption or "Trading scanner update (chart not attached).",
+            ))
+    return any(results)

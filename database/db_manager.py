@@ -242,7 +242,6 @@ def init_db():
             channel TEXT NOT NULL,
             created_at TIMESTAMP NOT NULL,
             expires_at TIMESTAMP NOT NULL,
-            attempts INTEGER NOT NULL DEFAULT 0,
             consumed_at TIMESTAMP
         )
     """)
@@ -259,6 +258,13 @@ def init_db():
         CREATE TABLE IF NOT EXISTS notification_state (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS notification_pair_attempts (
+            subject TEXT PRIMARY KEY,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            window_started_at TIMESTAMP NOT NULL
         )
     """)
 
@@ -429,8 +435,8 @@ def create_notification_pair_code(code_hash, channel, expires_at):
         conn.execute("UPDATE notification_pair_codes SET consumed_at = ? WHERE consumed_at IS NULL AND expires_at <= ?", (now, now))
         conn.execute("""
             INSERT INTO notification_pair_codes (
-                code_hash, channel, created_at, expires_at, attempts
-            ) VALUES (?, ?, ?, ?, 0)
+                code_hash, channel, created_at, expires_at
+            ) VALUES (?, ?, ?, ?)
         """, (code_hash, channel, now, expires_at))
         conn.commit()
     finally:
@@ -445,17 +451,17 @@ def consume_telegram_pair_code(code_hash, chat_id, chat_type, paired_by,
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("""
-            SELECT channel, expires_at, attempts, consumed_at
+            SELECT channel, expires_at, consumed_at
             FROM notification_pair_codes WHERE code_hash = ?
         """, (code_hash,)).fetchone()
         if not row or row["channel"] != "telegram" or row["consumed_at"]:
             conn.rollback()
             return False
-        if row["expires_at"] <= now or row["attempts"] >= max_attempts:
+        if row["expires_at"] <= now:
             conn.execute("UPDATE notification_pair_codes SET consumed_at = ? WHERE code_hash = ?", (now, code_hash))
             conn.commit()
             return False
-        conn.execute("UPDATE notification_pair_codes SET consumed_at = ?, attempts = attempts + 1 WHERE code_hash = ?", (now, code_hash))
+        conn.execute("UPDATE notification_pair_codes SET consumed_at = ? WHERE code_hash = ?", (now, code_hash))
         conn.execute("""
             INSERT INTO telegram_targets (chat_id, chat_type, paired_by, paired_at, active)
             VALUES (?, ?, ?, ?, 1)
@@ -474,17 +480,43 @@ def consume_telegram_pair_code(code_hash, chat_id, chat_type, paired_by,
         conn.close()
 
 
-def increment_pair_attempt(code_hash, max_attempts=5):
-    now = utc_timestamp()
+def register_pair_attempt(subject, max_attempts=5, window_minutes=10):
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     conn = get_connection()
     try:
-        conn.execute("""
-            UPDATE notification_pair_codes
-            SET attempts = attempts + 1,
-                consumed_at = CASE WHEN attempts + 1 >= ? THEN ? ELSE consumed_at END
-            WHERE code_hash = ? AND consumed_at IS NULL AND expires_at > ?
-        """, (max_attempts, now, code_hash, now))
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT attempts, window_started_at FROM notification_pair_attempts WHERE subject = ?",
+            (subject,),
+        ).fetchone()
+        if row:
+            try:
+                started = datetime.fromisoformat(str(row["window_started_at"]))
+            except (TypeError, ValueError):
+                started = now
+            if now - started >= timedelta(minutes=window_minutes):
+                attempts = 1
+                conn.execute(
+                    "UPDATE notification_pair_attempts SET attempts = ?, window_started_at = ? WHERE subject = ?",
+                    (attempts, now.isoformat(sep=" ", timespec="seconds"), subject),
+                )
+            else:
+                attempts = int(row["attempts"]) + 1
+                conn.execute(
+                    "UPDATE notification_pair_attempts SET attempts = ? WHERE subject = ?",
+                    (attempts, subject),
+                )
+        else:
+            attempts = 1
+            conn.execute(
+                "INSERT INTO notification_pair_attempts (subject, attempts, window_started_at) VALUES (?, ?, ?)",
+                (subject, attempts, now.isoformat(sep=" ", timespec="seconds")),
+            )
         conn.commit()
+        return attempts <= max_attempts
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

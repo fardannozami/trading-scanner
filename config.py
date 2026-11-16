@@ -5,10 +5,12 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-ALERT_CHANNELS = tuple(
-    channel.strip().lower()
-    for channel in os.getenv("ALERT_CHANNELS", "telegram").split(",")
-    if channel.strip()
+TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "").lstrip("@")
+_alert_channels_value = os.getenv("ALERT_CHANNELS", "telegram").strip().lower()
+ALERT_CHANNELS = (
+    ("telegram", "whatsapp")
+    if _alert_channels_value == "both"
+    else tuple(channel.strip() for channel in _alert_channels_value.split(",") if channel.strip())
 )
 WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "http://127.0.0.1:8787").rstrip("/")
 WHATSAPP_SERVICE_TOKEN = os.getenv("WHATSAPP_SERVICE_TOKEN", "")
@@ -31,12 +33,16 @@ def channel_enabled(channel):
     return channel in NOTIFICATION_CHANNELS
 
 
-def validate_whatsapp_service_token():
-    if channel_enabled("whatsapp") and not WHATSAPP_SERVICE_TOKEN:
+def validate_whatsapp_configuration():
+    if not channel_enabled("whatsapp"):
+        return
+    if not WHATSAPP_SERVICE_TOKEN:
         raise ValueError("WHATSAPP_SERVICE_TOKEN is required when WhatsApp notifications are enabled")
+    if not WHATSAPP_RECIPIENT_JID:
+        raise ValueError("WHATSAPP_RECIPIENT_JID is required when WhatsApp notifications are enabled")
 
 
-validate_whatsapp_service_token() if channel_enabled("whatsapp") else None
+validate_whatsapp_configuration()
 
 MT5_LOGIN = int(os.getenv("MT5_LOGIN", "0"))
 MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")

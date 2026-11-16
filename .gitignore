@@ -2,6 +2,10 @@
 *.db
 *.db-*
 *.db.bak-*
+whatsapp_service/*.db
+whatsapp_service/*.db-*
+whatsapp_service/*.db-shm
+whatsapp_service/*.db-wal
 *.log
 screenshots/
 __pycache__/

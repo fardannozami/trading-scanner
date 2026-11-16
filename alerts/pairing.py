@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -7,6 +8,7 @@ import config
 from database.db_manager import (
     create_notification_pair_code,
     get_telegram_targets,
+    init_db,
     remove_telegram_target,
 )
 
@@ -17,16 +19,24 @@ def _utc_text(value):
     )
 
 
+def hash_pair_code(code):
+    return hmac.new(
+        config.TELEGRAM_BOT_TOKEN.encode("utf-8"),
+        code.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
 def issue_pair_code(channel="telegram"):
     channel = channel.lower()
-    if channel not in {"telegram", "whatsapp"}:
-        raise ValueError("channel must be telegram or whatsapp")
+    if channel != "telegram":
+        raise ValueError("Telegram pair codes are only for Telegram chats")
     code = f"{secrets.randbelow(100_000_000):08d}"
     expires = datetime.now(timezone.utc) + timedelta(
         minutes=config.TELEGRAM_PAIR_CODE_TTL_MINUTES
     )
     create_notification_pair_code(
-        hashlib.sha256(code.encode("ascii")).hexdigest(),
+        hash_pair_code(code),
         channel,
         _utc_text(expires),
     )
@@ -37,11 +47,12 @@ def main():
     parser = argparse.ArgumentParser(prog="python -m alerts.pairing")
     commands = parser.add_subparsers(dest="command", required=True)
     issue = commands.add_parser("issue")
-    issue.add_argument("channel", choices=("telegram", "whatsapp"), default="telegram", nargs="?")
+    issue.add_argument("channel", choices=("telegram",), default="telegram", nargs="?")
     commands.add_parser("list")
     remove = commands.add_parser("remove")
     remove.add_argument("chat_id")
     args = parser.parse_args()
+    init_db()
 
     if args.command == "issue":
         code, expires = issue_pair_code(args.channel)

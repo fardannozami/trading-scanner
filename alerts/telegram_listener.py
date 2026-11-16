@@ -1,15 +1,15 @@
-import hashlib
 import logging
 import time
 
 import requests
 
 import config
+from alerts.pairing import hash_pair_code
 from database.db_manager import (
     consume_telegram_pair_code,
     get_notification_state,
-    increment_pair_attempt,
     init_db,
+    register_pair_attempt,
     set_notification_state,
 )
 
@@ -41,10 +41,25 @@ class TelegramPairListener:
         )
         return member.get("status") in {"creator", "administrator"}
 
+    def _reply(self, chat_id, text):
+        try:
+            self._api("sendMessage", chat_id=chat_id, text=text)
+        except Exception as exc:
+            log.warning("Could not send Telegram pairing reply (%s)", type(exc).__name__)
+
     def _handle_message(self, message):
         text = str(message.get("text") or "").strip()
         parts = text.split()
         if not parts or parts[0].split("@", 1)[0] != "/pair":
+            return
+        if (
+            parts[0].count("@")
+            and config.TELEGRAM_BOT_USERNAME
+            and parts[0].rsplit("@", 1)[1].lower() != config.TELEGRAM_BOT_USERNAME.lower()
+        ):
+            return
+        command = parts[0].split("@", 1)[0]
+        if command != "/pair":
             return
 
         chat = message.get("chat") or {}
@@ -58,23 +73,32 @@ class TelegramPairListener:
         if chat_type != "private":
             try:
                 if not self._is_group_admin(chat_id, user_id):
-                    self._api(
-                        "sendMessage", chat_id=chat_id,
-                        text="Pairing group hanya boleh dilakukan admin grup.",
+                    self._reply(
+                        chat_id, "Pairing group hanya boleh dilakukan admin grup."
                     )
                     return
-            except Exception:
-                log.exception("Could not verify group admin for pairing")
+            except Exception as exc:
+                log.warning("Could not verify group admin (%s)", type(exc).__name__)
                 return
 
         if len(parts) != 2 or not parts[1].isdigit() or len(parts[1]) != 8:
-            self._api(
-                "sendMessage", chat_id=chat_id,
-                text="Format pairing: /pair KODE (kode 8 digit berlaku sementara).",
+            self._reply(
+                chat_id, "Format pairing: /pair KODE (kode 8 digit berlaku sementara)."
             )
             return
 
-        code_hash = hashlib.sha256(parts[1].encode("ascii")).hexdigest()
+        subject = f"telegram:{chat_id}:{user_id}"
+        if not register_pair_attempt(
+            subject,
+            max_attempts=config.TELEGRAM_PAIR_MAX_ATTEMPTS,
+            window_minutes=config.TELEGRAM_PAIR_CODE_TTL_MINUTES,
+        ):
+            self._reply(
+                chat_id, "Batas percobaan pairing tercapai. Coba lagi setelah 10 menit."
+            )
+            return
+
+        code_hash = hash_pair_code(parts[1])
         paired = consume_telegram_pair_code(
             code_hash,
             chat_id,
@@ -83,18 +107,13 @@ class TelegramPairListener:
             max_attempts=config.TELEGRAM_PAIR_MAX_ATTEMPTS,
         )
         if paired:
-            self._api(
-                "sendMessage", chat_id=chat_id,
-                text="Pairing berhasil. Chat ini akan menerima notifikasi scanner.",
+            self._reply(
+                chat_id, "Pairing berhasil. Chat ini akan menerima notifikasi scanner."
             )
             log.info("Telegram notification target paired (%s)", chat_type)
         else:
-            increment_pair_attempt(
-                code_hash, max_attempts=config.TELEGRAM_PAIR_MAX_ATTEMPTS
-            )
-            self._api(
-                "sendMessage", chat_id=chat_id,
-                text="Kode tidak valid, sudah dipakai, atau kedaluwarsa.",
+            self._reply(
+                chat_id, "Kode tidak valid, sudah dipakai, atau kedaluwarsa."
             )
 
     def run(self):
@@ -107,21 +126,18 @@ class TelegramPairListener:
                     allowed_updates=["message"],
                 ) or []
                 for update in updates:
-                    self.offset = max(self.offset, int(update["update_id"]) + 1)
-                    try:
-                        message = update.get("message") or {}
-                        if message:
-                            self._handle_message(message)
-                    except Exception:
-                        log.exception("Failed to process Telegram update")
-                    finally:
-                        set_notification_state(
-                            "telegram_update_offset", str(self.offset)
-                        )
+                    next_offset = int(update["update_id"]) + 1
+                    message = update.get("message") or {}
+                    if message:
+                        self._handle_message(message)
+                    self.offset = max(self.offset, next_offset)
+                    set_notification_state(
+                        "telegram_update_offset", str(self.offset)
+                    )
             except KeyboardInterrupt:
                 raise
-            except Exception:
-                log.exception("Telegram pairing listener failed; retrying")
+            except Exception as exc:
+                log.warning("Telegram pairing listener failed (%s); retrying", type(exc).__name__)
                 time.sleep(5)
 
 
