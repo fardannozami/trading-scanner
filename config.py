@@ -97,7 +97,9 @@ PAPER_ALLOW_STACKING = os.getenv("PAPER_ALLOW_STACKING", "false").lower() == "tr
 # Anything less and the bot only validates and logs the intended order.
 # ─────────────────────────────────────────────
 LIVE_TRADING_ENABLED = os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true"
-LIVE_TRADING_DRY_RUN = os.getenv("LIVE_TRADING_DRY_RUN", "true").lower() == "true"
+# Fail safe: only an explicit "false" disables dry-run, so typos such as
+# "1", "yes" or "true " (trailing space) never arm real orders.
+LIVE_TRADING_DRY_RUN = os.getenv("LIVE_TRADING_DRY_RUN", "true").strip().lower() != "false"
 LIVE_CONFIRMATION = os.getenv("LIVE_CONFIRMATION", "").strip().upper()
 LIVE_SEND_ORDERS = (
     LIVE_TRADING_ENABLED

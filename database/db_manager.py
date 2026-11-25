@@ -361,40 +361,37 @@ def log_risk(balance, equity, risk_status, login=None, currency=None):
 
 
 def get_recent_losses(n=5):
-    """Return the most recent losses, stopping at the first non-loss.
+    """Return the longest current losing streak (up to ``n``) of any source.
 
-    Reads manual `trades`, virtual `paper_trades` and real `live_trades`: the
-    scanner never writes to `trades`, so relying on it alone kept the
-    consecutive-loss rule from ever triggering.
+    Manual `trades`, virtual `paper_trades` and real `live_trades` are counted
+    as separate streaks: merging them double-counted one signal that lost in
+    both paper and live, and let a paper win reset a real losing streak.
     """
+    queries = (
+        "SELECT outcome AS status FROM trades WHERE outcome IS NOT NULL "
+        "ORDER BY closed_at DESC, id DESC LIMIT ?",
+        "SELECT status FROM paper_trades "
+        "WHERE status IS NOT NULL AND status != 'open' "
+        "ORDER BY closed_at DESC, id DESC LIMIT ?",
+        "SELECT status FROM live_trades "
+        "WHERE status IN ('win', 'loss', 'breakeven') "
+        "ORDER BY closed_at DESC, id DESC LIMIT ?",
+    )
     conn = get_connection()
     c = conn.cursor()
-    c.execute("""
-        SELECT status FROM (
-            SELECT outcome AS status, closed_at, id
-            FROM trades
-            WHERE outcome IS NOT NULL
-            UNION ALL
-            SELECT status, closed_at, id
-            FROM paper_trades
-            WHERE status IS NOT NULL AND status != 'open'
-            UNION ALL
-            SELECT status, closed_at, id
-            FROM live_trades
-            WHERE status IN ('win', 'loss', 'breakeven')
-        )
-        ORDER BY closed_at DESC, id DESC
-        LIMIT ?
-    """, (n,))
-    rows = c.fetchall()
+    longest = []
+    for query in queries:
+        c.execute(query, (n,))
+        losses = []
+        for row in c.fetchall():
+            if row["status"] == "loss":
+                losses.append("loss")
+            else:
+                break
+        if len(losses) > len(longest):
+            longest = losses
     conn.close()
-    losses = []
-    for row in rows:
-        if row["status"] == "loss":
-            losses.append("loss")
-        else:
-            break
-    return losses
+    return longest
 
 
 def get_equity_baseline(since, login=None, currency=None):
@@ -1071,7 +1068,9 @@ def count_live_trades_since(since_date=None):
 
     Rejected orders (status='error') never became trades, so they do not count.
     """
-    since = (since_date or date.today()).isoformat()
+    # opened_at is stored in UTC, so the default "today" must be the UTC date,
+    # not the host's local date (UTC+7 would otherwise lose 7h of trades).
+    since = (since_date or datetime.now(timezone.utc).date()).isoformat()
     conn = get_connection()
     c = conn.cursor()
     c.execute(

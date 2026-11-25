@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import config
 from database.db_manager import get_equity_baseline, get_recent_losses
-from scanner.mt5_connector import default_contract_size, get_symbol_info
+from scanner.mt5_connector import get_symbol_info
 
 
 def _period_starts():
@@ -98,29 +98,38 @@ class RiskManager:
 
     def calculate_position_size(self, account_balance, entry, sl, symbol=None,
                                 contract_size=None):
-        """Return lot size based on MAX_RISK_PER_TRADE%.
+        """Return the raw lot size that risks MAX_RISK_PER_TRADE% (0 = skip).
 
-        Sizing uses ``price_risk * contract_size`` so it works for gold,
-        forex and CFDs instead of assuming a 5-digit forex point.
+        The loss per lot is ``price_risk / tick_size * tick_value``: MT5 quotes
+        ``trade_tick_value`` in the *account* currency, so this is correct for
+        USD, IDR and cent accounts alike. ``price_risk * contract_size`` is in
+        the symbol's profit currency and is only used when ``contract_size`` is
+        passed explicitly (account currency == profit currency).
+
+        The result is not rounded up to the broker minimum: the caller must
+        skip the trade when it is below ``volume_min`` instead of
+        over-risking.
         """
+        if not account_balance or account_balance <= 0:
+            return 0.0
         risk_amount = account_balance * (config.MAX_RISK_PER_TRADE / 100)
         price_risk = abs(float(entry) - float(sl))
         if price_risk <= 0 or risk_amount <= 0:
-            return 0.01
+            return 0.0
 
         info = get_symbol_info(symbol) if symbol else {}
-        if contract_size is None:
-            contract_size = (
-                info.get("trade_contract_size")
-                or default_contract_size(symbol)
-            )
+        tick_size = float(info.get("trade_tick_size") or 0)
+        tick_value = float(info.get("trade_tick_value") or 0)
+        if tick_size > 0 and tick_value > 0:
+            value_per_lot = price_risk / tick_size * tick_value
+        elif contract_size:
+            value_per_lot = price_risk * float(contract_size)
+        else:
+            return 0.0
 
-        value_per_lot = price_risk * float(contract_size)
         if value_per_lot <= 0:
-            return 0.01
-
-        lot_size = risk_amount / value_per_lot
-        return round(max(0.01, min(lot_size, 100.0)), 2)
+            return 0.0
+        return min(risk_amount / value_per_lot, 100.0)
 
     def is_elite_trade_allowed(self, scoring, risk_status):
         """Elite trades require ELITE grade + no violations."""

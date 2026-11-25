@@ -186,6 +186,9 @@ def open_live_trade(symbol, analysis, scoring, risk_manager=None,
 
     # Exposure caps: total open real positions and per-symbol stacking.
     positions = get_positions(magic=config.LIVE_MAGIC)
+    if positions is None:
+        log.warning("Live trade skipped for %s: could not read open positions", symbol)
+        return None
     if len(positions) >= config.LIVE_MAX_OPEN_POSITIONS:
         log.info(
             "Live trade skipped for %s: max open positions reached (%d/%d)",
@@ -232,9 +235,21 @@ def open_live_trade(symbol, analysis, scoring, risk_manager=None,
     # Position size.
     if config.LIVE_LOT_MODE == "risk" and risk_manager is not None:
         account_balance = _account_balance()
+        if account_balance is None:
+            log.warning("Live trade skipped for %s: account balance unavailable", symbol)
+            return None
         lot = risk_manager.calculate_position_size(
             account_balance, price, sl, symbol=symbol,
         )
+        # Never round a risk-sized lot up to the broker minimum: that would
+        # risk more than MAX_RISK_PER_TRADE.
+        vmin = float(info.get("volume_min") or 0.01)
+        if lot < vmin:
+            log.info(
+                "Live trade skipped for %s: risk lot %.4f below broker minimum %s",
+                symbol, lot, vmin,
+            )
+            return None
     else:
         lot = config.LIVE_FIXED_LOT
     lot = _normalize_volume(lot, info)
@@ -382,13 +397,16 @@ def open_live_trade(symbol, analysis, scoring, risk_manager=None,
 
 
 def _account_balance():
+    """Account balance, or None when it cannot be read (caller must skip)."""
     if not MT5_AVAILABLE:
-        return 0.0
+        return None
     try:
         info = mt5.account_info()
     except Exception:
-        return 0.0
-    return float(info.balance) if info else 0.0
+        return None
+    if not info or float(info.balance) <= 0:
+        return None
+    return float(info.balance)
 
 
 def sync_live_trades():
@@ -405,7 +423,12 @@ def sync_live_trades():
     if not trades:
         return []
 
-    open_tickets = {p["ticket"] for p in get_positions(magic=config.LIVE_MAGIC)}
+    positions = get_positions(magic=config.LIVE_MAGIC)
+    if positions is None:
+        # MT5 query failed: an empty answer would wrongly close every row.
+        log.warning("Live sync skipped: could not read open positions")
+        return []
+    open_tickets = {p["ticket"] for p in positions}
     events = []
 
     for trade in trades:
@@ -418,16 +441,18 @@ def sync_live_trades():
             # Position gone but no history yet: leave it for the next scan.
             continue
 
+        # DEAL_ENTRY_OUT (1) / DEAL_ENTRY_OUT_BY (3). Without an exit deal the
+        # position is not proven closed (history may lag), so retry next scan.
+        exits = [d for d in deals if int(d.get("entry") or 0) in (1, 3)]
+        if not exits:
+            continue
         profit = sum(
             float(d.get("profit") or 0.0)
             + float(d.get("swap") or 0.0)
             + float(d.get("commission") or 0.0)
             for d in deals
         )
-        exits = [d for d in deals if int(d.get("entry") or 0) == 1]
-        exit_price = (
-            float(exits[-1]["price"]) if exits else trade.get("entry")
-        )
+        exit_price = float(exits[-1]["price"])
 
         status = "win" if profit > 0 else "loss" if profit < 0 else "breakeven"
         if not close_live_trade(trade["id"], exit_price, profit, status):

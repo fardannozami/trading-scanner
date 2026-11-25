@@ -152,17 +152,21 @@ def get_tick(symbol):
 
 
 def get_positions(symbol=None, magic=None):
-    """Open positions, optionally filtered by symbol and/or magic number."""
+    """Open positions, optionally filtered by symbol and/or magic number.
+
+    Returns None (not []) when MT5 cannot be queried, so callers never mistake
+    an IPC error for "no open positions" and close or stack trades wrongly.
+    """
     if not MT5_AVAILABLE:
-        return []
+        return None
     try:
         positions = (
             mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
         )
     except Exception:
-        return []
+        return None
     if positions is None:
-        return []
+        return None
     result = []
     for p in positions:
         if magic is not None and p.magic != magic:
