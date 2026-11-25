@@ -1,6 +1,9 @@
 import unittest
+from unittest import mock
 
 import pandas as pd
+
+import config
 
 from scanner.market_analyzer import (
     calculate_entry_levels,
@@ -65,6 +68,19 @@ class RewardToStructureTests(unittest.TestCase):
         levels = calculate_entry_levels(df, "bullish", [(8, 2003.0)], lows, digits=2)
         self.assertAlmostEqual(levels["rr"], round(3.0 / levels["risk"], 2), places=1)
         self.assertLess(levels["rr"], 2)
+
+    def test_stop_farther_than_max_atr_is_not_a_setup(self):
+        # ATR ~4; swing high 40 above entry -> ~10 ATR stop, like the 89-point
+        # XAUUSD stop anchored to the top of a long sell-off.
+        df = _trend_bars()
+        with mock.patch.object(config, "MAX_SL_ATR", 2.0):
+            self.assertIsNone(
+                calculate_entry_levels(df, "bearish", [(5, 2040.0)], [], digits=2)
+            )
+        with mock.patch.object(config, "MAX_SL_ATR", 0):
+            self.assertIsNotNone(
+                calculate_entry_levels(df, "bearish", [(5, 2040.0)], [], digits=2)
+            )
 
     def test_rr_open_space_when_no_opposing_structure(self):
         df = _trend_bars()

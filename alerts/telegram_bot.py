@@ -90,6 +90,11 @@ def format_alert(symbol, analysis, scoring, alert_stage="setup_developing",
                 f"{live_trade['lot']:.2f} lot @ <code>{live_trade['entry']}</code> "
                 f"(ticket #{live_trade.get('ticket')})\n"
             )
+        elif live_trade.get("skipped"):
+            msg += (
+                f"⏭ <b>Live: no order</b> — "
+                f"{escape(str(live_trade.get('reason') or 'skipped'))}\n"
+            )
         elif live_trade.get("dry_run"):
             msg += (
                 f"🧪 <b>Live dry-run</b>: would send "

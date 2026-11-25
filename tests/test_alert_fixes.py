@@ -69,6 +69,20 @@ class StageTests(unittest.TestCase):
         )
 
 
+class LiveStatusLineTests(unittest.TestCase):
+    def test_skipped_live_trade_is_explained_in_alert(self):
+        from alerts.telegram_bot import format_alert
+        msg = format_alert(
+            "XAUUSD", {"bias": "bearish", "conditions": ["FVG"]},
+            {"grade": "Standard", "score": 5},
+            live_trade={"ok": False, "dry_run": False, "skipped": True,
+                        "reason": "grade Standard below minimum A+"},
+        )
+        self.assertIn("Live: no order", msg)
+        self.assertIn("grade Standard below minimum A+", msg)
+        self.assertNotIn("rejected", msg)
+
+
 class CooldownTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

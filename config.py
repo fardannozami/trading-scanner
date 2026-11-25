@@ -56,6 +56,9 @@ MAX_RISK_PER_TRADE = float(os.getenv("MAX_RISK_PER_TRADE", "1.0"))
 MAX_DAILY_DRAWDOWN = float(os.getenv("MAX_DAILY_DRAWDOWN", "3.0"))
 MAX_WEEKLY_DRAWDOWN = float(os.getenv("MAX_WEEKLY_DRAWDOWN", "6.0"))
 MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3"))
+# Skip a setup when the structural stop is farther than this many ATRs from
+# entry: a stop 4-5 ATR away puts TP1 (2R) out of reach. 0 disables the cap.
+MAX_SL_ATR = float(os.getenv("MAX_SL_ATR", "2.0"))
 
 SCORE_STANDARD = 4
 SCORE_A = 7

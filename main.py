@@ -323,6 +323,12 @@ def scan_once(risk_manager: RiskManager):
             if grade is None:
                 continue
 
+            if not analysis.get("levels"):
+                # No tradeable entry/SL/TP (e.g. stop > MAX_SL_ATR x ATR).
+                log.info(f"{symbol}: {grade} skipped — no valid entry levels "
+                         f"(stop too far or levels invalid)")
+                continue
+
             # News blackout check
             if config.NEWS_FILTER_ENABLED:
                 blackout, reason = is_news_blackout(symbol)

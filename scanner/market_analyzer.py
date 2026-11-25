@@ -1,6 +1,8 @@
 import pandas as pd
 from datetime import datetime, timezone
 
+import config
+
 # A gap/break only counts as a live signal while it is still fresh. Without
 # these limits an FVG or BOS stays "active" for the whole dataframe, so the
 # score never drops and every scan produces the same alert.
@@ -296,6 +298,11 @@ def calculate_entry_levels(df, bias, swing_highs, swing_lows, digits=None):
         room = (entry - max(opposing)) if opposing else None
 
     else:
+        return None
+
+    # A stop anchored to a swing far behind price (e.g. the top of a long
+    # one-way move) makes TP1 unrealistic and the risk lot tiny: no setup.
+    if config.MAX_SL_ATR > 0 and risk > atr * config.MAX_SL_ATR:
         return None
 
     # "rr" is the reward available before the nearest opposing structure,

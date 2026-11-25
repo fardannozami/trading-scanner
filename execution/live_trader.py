@@ -101,6 +101,18 @@ def _filling_candidates(info):
     return result
 
 
+def _skip(log_fn, message, symbol, *args):
+    """Log why a signal did not become a live order and report it to the alert.
+
+    ``message`` is a "Live trade skipped for %s: <reason>" format string; the
+    reason part is returned so the Telegram alert can say why no order went out.
+    """
+    log_fn(message, symbol, *args)
+    reason = (message % ((symbol,) + args)).split(": ", 1)[-1]
+    return {"ok": False, "dry_run": False, "skipped": True, "reason": reason,
+            "symbol": symbol}
+
+
 def _stops_ok(direction, price, sl, tp, info):
     """Broker minimum stop distance (trade_stops_level, in points)."""
     stops = int(info.get("trade_stops_level") or 0)
@@ -115,15 +127,16 @@ def open_live_trade(symbol, analysis, scoring, risk_manager=None,
                     setup_id=None, timeframe=None):
     """Send a real market order for a signal.
 
-    Returns None when live trading is off or a gate rejects the signal. When an
-    order is attempted returns a dict: ``{"ok", "dry_run", "ticket", ...}``.
+    Returns None when live trading is off or the signal has no direction or
+    levels. When a gate rejects the signal returns ``{"skipped": True,
+    "reason": ...}``. When an order is attempted returns a dict:
+    ``{"ok", "dry_run", "ticket", ...}``.
     """
     if not config.LIVE_TRADING_ENABLED:
         return None
 
     if not MT5_AVAILABLE:
-        log.error("Live trade skipped for %s: MetaTrader5 package unavailable", symbol)
-        return None
+        return _skip(log.error, "Live trade skipped for %s: MetaTrader5 package unavailable", symbol)
 
     levels = analysis.get("levels") or {}
     direction = _direction(analysis)
@@ -134,70 +147,58 @@ def open_live_trade(symbol, analysis, scoring, risk_manager=None,
     sl = levels.get("sl")
     tp_signal = _target_price(levels)
     if entry is None or sl is None or tp_signal is None:
-        log.info("Live trade skipped for %s: incomplete levels", symbol)
-        return None
+        return _skip(log.info, "Live trade skipped for %s: incomplete levels", symbol)
 
     if not validate_trade(direction, entry, sl, tp_signal):
-        log.info(
+        return _skip(log.info,
             "Live trade skipped for %s: invalid signal levels "
             "(direction=%s entry=%s sl=%s tp=%s)",
             symbol, direction, entry, sl, tp_signal,
         )
-        return None
 
     grade = scoring.get("grade")
     if not _grade_ok(grade):
-        log.info(
+        return _skip(log.info,
             "Live trade skipped for %s: grade %s below minimum %s",
             symbol, grade, config.LIVE_MIN_GRADE,
         )
-        return None
 
     info = get_symbol_info(symbol)
     if not info:
-        log.warning("Live trade skipped for %s: symbol info unavailable", symbol)
-        return None
+        return _skip(log.warning, "Live trade skipped for %s: symbol info unavailable", symbol)
 
     tick = get_tick(symbol)
     if not tick or not tick.get("ask") or not tick.get("bid"):
-        log.warning("Live trade skipped for %s: no tick data", symbol)
-        return None
+        return _skip(log.warning, "Live trade skipped for %s: no tick data", symbol)
 
     # Direction availability (disabled / long-only / short-only symbols).
     trade_mode = int(info.get("trade_mode") or 4)
     if trade_mode == 0:
-        log.warning("Live trade skipped for %s: trading disabled by broker", symbol)
-        return None
+        return _skip(log.warning, "Live trade skipped for %s: trading disabled by broker", symbol)
     if trade_mode == 1 and direction == "sell":
-        log.info("Live trade skipped for %s: symbol is long-only", symbol)
-        return None
+        return _skip(log.info, "Live trade skipped for %s: symbol is long-only", symbol)
     if trade_mode == 2 and direction == "buy":
-        log.info("Live trade skipped for %s: symbol is short-only", symbol)
-        return None
+        return _skip(log.info, "Live trade skipped for %s: symbol is short-only", symbol)
 
     # Daily trade cap.
     daily = count_live_trades_since()
     if daily >= config.LIVE_MAX_DAILY_TRADES:
-        log.info(
+        return _skip(log.info,
             "Live trade skipped for %s: daily cap reached (%d/%d)",
             symbol, daily, config.LIVE_MAX_DAILY_TRADES,
         )
-        return None
 
     # Exposure caps: total open real positions and per-symbol stacking.
     positions = get_positions(magic=config.LIVE_MAGIC)
     if positions is None:
-        log.warning("Live trade skipped for %s: could not read open positions", symbol)
-        return None
+        return _skip(log.warning, "Live trade skipped for %s: could not read open positions", symbol)
     if len(positions) >= config.LIVE_MAX_OPEN_POSITIONS:
-        log.info(
+        return _skip(log.info,
             "Live trade skipped for %s: max open positions reached (%d/%d)",
             symbol, len(positions), config.LIVE_MAX_OPEN_POSITIONS,
         )
-        return None
     if any(p["symbol"] == symbol for p in positions):
-        log.info("Live trade skipped for %s: position already open", symbol)
-        return None
+        return _skip(log.info, "Live trade skipped for %s: position already open", symbol)
 
     # Market execution price.
     price = float(tick["ask"] if direction == "buy" else tick["bid"])
@@ -207,18 +208,16 @@ def open_live_trade(symbol, analysis, scoring, risk_manager=None,
     tp = round(float(tp_signal), digits)
 
     if not validate_trade(direction, price, sl, tp):
-        log.info(
+        return _skip(log.info,
             "Live trade skipped for %s: price %.5f outside SL/TP "
             "(sl=%s tp=%s)", symbol, price, sl, tp,
         )
-        return None
 
     if not _stops_ok(direction, price, sl, tp, info):
-        log.info(
+        return _skip(log.info,
             "Live trade skipped for %s: SL/TP inside broker minimum stop distance",
             symbol,
         )
-        return None
 
     point = float(info.get("point") or 0)
     spread_points = (float(tick["spread"]) / point) if point else 0.0
@@ -226,18 +225,16 @@ def open_live_trade(symbol, analysis, scoring, risk_manager=None,
         config.LIVE_MAX_SPREAD_POINTS > 0
         and spread_points > config.LIVE_MAX_SPREAD_POINTS
     ):
-        log.info(
+        return _skip(log.info,
             "Live trade skipped for %s: spread %.1f pts > limit %.1f",
             symbol, spread_points, config.LIVE_MAX_SPREAD_POINTS,
         )
-        return None
 
     # Position size.
     if config.LIVE_LOT_MODE == "risk" and risk_manager is not None:
         account_balance = _account_balance()
         if account_balance is None:
-            log.warning("Live trade skipped for %s: account balance unavailable", symbol)
-            return None
+            return _skip(log.warning, "Live trade skipped for %s: account balance unavailable", symbol)
         lot = risk_manager.calculate_position_size(
             account_balance, price, sl, symbol=symbol,
         )
@@ -245,17 +242,15 @@ def open_live_trade(symbol, analysis, scoring, risk_manager=None,
         # risk more than MAX_RISK_PER_TRADE.
         vmin = float(info.get("volume_min") or 0.01)
         if lot < vmin:
-            log.info(
+            return _skip(log.info,
                 "Live trade skipped for %s: risk lot %.4f below broker minimum %s",
                 symbol, lot, vmin,
             )
-            return None
     else:
         lot = config.LIVE_FIXED_LOT
     lot = _normalize_volume(lot, info)
     if lot <= 0:
-        log.warning("Live trade skipped for %s: computed lot size is 0", symbol)
-        return None
+        return _skip(log.warning, "Live trade skipped for %s: computed lot size is 0", symbol)
 
     order_type = mt5.ORDER_TYPE_BUY if direction == "buy" else mt5.ORDER_TYPE_SELL
     request = {

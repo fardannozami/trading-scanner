@@ -97,19 +97,33 @@ class OpenLiveTradeTests(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
+    def _assert_skipped(self, result, reason_part):
+        self.assertTrue(result["skipped"])
+        self.assertFalse(result["ok"])
+        self.assertIn(reason_part, result["reason"])
+
     def test_skips_when_positions_cannot_be_read(self):
         with mock.patch.object(live, "get_positions", return_value=None):
-            self.assertIsNone(live.open_live_trade("XAUUSD", ANALYSIS, SCORING, RiskManager()))
+            result = live.open_live_trade("XAUUSD", ANALYSIS, SCORING, RiskManager())
+        self._assert_skipped(result, "could not read open positions")
 
     def test_skips_when_risk_lot_below_broker_minimum(self):
         # $100 balance -> $1 risk; $5.1 SL costs $510/lot -> 0.002 lot < 0.01.
         with mock.patch.object(live, "get_positions", return_value=[]):
-            self.assertIsNone(live.open_live_trade("XAUUSD", ANALYSIS, SCORING, RiskManager()))
+            result = live.open_live_trade("XAUUSD", ANALYSIS, SCORING, RiskManager())
+        self._assert_skipped(result, "below broker minimum")
 
     def test_skips_when_balance_unavailable(self):
         live.mt5.account_info = lambda: None
         with mock.patch.object(live, "get_positions", return_value=[]):
-            self.assertIsNone(live.open_live_trade("XAUUSD", ANALYSIS, SCORING, RiskManager()))
+            result = live.open_live_trade("XAUUSD", ANALYSIS, SCORING, RiskManager())
+        self._assert_skipped(result, "account balance unavailable")
+
+    def test_grade_skip_reason_is_reported(self):
+        result = live.open_live_trade(
+            "XAUUSD", ANALYSIS, {"grade": "Standard", "score": 5}, RiskManager()
+        )
+        self.assertEqual(result["reason"], "grade Standard below minimum A+")
 
     def test_sized_trade_still_goes_through_dry_run(self):
         live.mt5.account_info = lambda: SimpleNamespace(balance=100_000.0)

@@ -367,6 +367,7 @@ All values are read from `.env` (see `.env.example` for a template).
 | `MAX_DAILY_DRAWDOWN` | `3.0` | Daily DD % limit |
 | `MAX_WEEKLY_DRAWDOWN` | `6.0` | Weekly DD % limit |
 | `MAX_CONSECUTIVE_LOSSES` | `3` | Losses before scanner pauses |
+| `MAX_SL_ATR` | `2.0` | Skip setups whose structural stop is more than N × ATR from entry (0 = no cap) |
 | `SCORE_STANDARD` | `4` | Min score for Standard alert |
 | `SCORE_A` | `7` | Min score for A alert |
 | `SCORE_A_PLUS` | `10` | Min score for A+ alert |
