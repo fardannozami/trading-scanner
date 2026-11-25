@@ -117,13 +117,16 @@ def detect_fvg(df):
                 "filled": False,
             })
 
-    last_close = df["Close"].iloc[-1]
+    closes = df["Close"].values
     last_index = len(df) - 1
     for fvg in fvgs:
+        # Filled once ANY later candle closed through the gap: a gap that was
+        # invalidated and then reclaimed is no longer an untouched imbalance.
+        later = closes[fvg["index"] + 1:]
         if fvg["type"] == "bullish_fvg":
-            fvg["filled"] = last_close < fvg["bottom"]
+            fvg["filled"] = bool(len(later)) and bool(later.min() < fvg["bottom"])
         else:
-            fvg["filled"] = last_close > fvg["top"]
+            fvg["filled"] = bool(len(later)) and bool(later.max() > fvg["top"])
         fvg["age"] = last_index - fvg["index"]
         fvg["active"] = (not fvg["filled"]) and fvg["age"] <= FVG_MAX_AGE_BARS
     return fvgs
@@ -146,13 +149,21 @@ def detect_retest(df, fvgs, swing_highs, swing_lows, bias):
             if fvg["bottom"] - tolerance <= last["High"] <= fvg["top"] + tolerance:
                 return {"type": "fvg_retest", "level": fvg["top"], "fvg_type": "bearish"}
 
+    # A structure retest needs the level to have been broken first (a close
+    # beyond it after the swing formed) and price to hold on the broken side.
+    # Otherwise "near the swing high" is just price running into resistance.
+    closes = df["Close"].values
     if bias == "bullish" and swing_highs:
-        _, bos_level = swing_highs[-1]
-        if abs(last["Close"] - bos_level) < tolerance * 2:
+        idx, bos_level = swing_highs[-1]
+        broken = (closes[idx + 1:-1] > bos_level).any()
+        holding = last["Close"] >= bos_level - tolerance
+        if broken and holding and abs(last["Close"] - bos_level) < tolerance * 2:
             return {"type": "structure_retest", "level": round(bos_level, 5)}
     if bias == "bearish" and swing_lows:
-        _, bos_level = swing_lows[-1]
-        if abs(last["Close"] - bos_level) < tolerance * 2:
+        idx, bos_level = swing_lows[-1]
+        broken = (closes[idx + 1:-1] < bos_level).any()
+        holding = last["Close"] <= bos_level + tolerance
+        if broken and holding and abs(last["Close"] - bos_level) < tolerance * 2:
             return {"type": "structure_retest", "level": round(bos_level, 5)}
     return None
 

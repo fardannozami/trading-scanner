@@ -543,6 +543,25 @@ def remove_telegram_target(chat_id):
         conn.close()
 
 
+def migrate_telegram_target(old_chat_id, new_chat_id):
+    """Move a paired target to its new chat id (group → supergroup upgrade)."""
+    conn = get_connection()
+    try:
+        conn.execute("""
+            INSERT INTO telegram_targets (chat_id, chat_type, paired_by, paired_at, active)
+            SELECT ?, 'supergroup', paired_by, paired_at, 1
+            FROM telegram_targets WHERE chat_id = ?
+            ON CONFLICT(chat_id) DO UPDATE SET active = 1
+        """, (str(new_chat_id), str(old_chat_id)))
+        conn.execute(
+            "UPDATE telegram_targets SET active = 0 WHERE chat_id = ?",
+            (str(old_chat_id),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_notification_state(key):
     conn = get_connection()
     try:
@@ -594,7 +613,7 @@ def set_alert_cooldown(key, when):
 
 
 def clear_alert_cooldowns(symbol):
-    """Drop every persisted cooldown for `symbol` (keys are ``SYMBOL_GRADE``).
+    """Drop every persisted cooldown for `symbol` (keys start with ``SYMBOL_``).
 
     Called when a position closes so the next signal alerts immediately
     instead of waiting out the old cooldown window.

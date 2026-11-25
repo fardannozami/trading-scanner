@@ -74,12 +74,29 @@ def _cooldown_ok(key: str, minutes: int | None = None) -> bool:
     if last and (now - last).total_seconds() < window * 60:
         return False
 
-    _alerted[key] = now
+    _mark_cooldown(key, now)
+    return True
+
+
+def _cooldown_active(key: str, minutes: int | None = None) -> bool:
+    """Like ``not _cooldown_ok`` but read-only: the window is not consumed."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    window = config.ALERT_COOLDOWN_MINUTES if minutes is None else minutes
     try:
-        set_alert_cooldown(key, now)
+        last = get_alert_cooldown(key)
+    except Exception:
+        log.exception("Could not read cooldown for %s; falling back to memory", key)
+        last = _alerted.get(key)
+    return bool(last and (now - last).total_seconds() < window * 60)
+
+
+def _mark_cooldown(key: str, when: datetime | None = None):
+    when = when or datetime.now(timezone.utc).replace(tzinfo=None)
+    _alerted[key] = when
+    try:
+        set_alert_cooldown(key, when)
     except Exception:
         log.exception("Could not persist cooldown for %s", key)
-    return True
 
 
 def _notify_upcoming_news():
@@ -209,15 +226,33 @@ def _sync_live_trades():
 
 
 def determine_stage(scoring, analysis) -> str:
+    """Alert stage; never lower for a higher grade (A+ >= A)."""
     grade = scoring.get("grade")
     conditions = analysis.get("conditions", [])
     if grade == "ELITE":
         return "high_confidence"
     if grade == "A+" and "Rejection Candle" in conditions:
         return "m15_confirmation"
-    if grade == "A":
+    if grade in ("A", "A+"):
         return "entry_zone"
     return "setup_developing"
+
+
+def _alert_cooldown(symbol, analysis, grade, position):
+    """(cooldown key, window in minutes) for an entry alert.
+
+    The key includes the direction so a reversal is not blocked by the
+    previous opposite-side alert. While a position is open, an allowed
+    upgrade/reversal alert is keyed to that position and lasts until the
+    position closes (``_rearm_symbol`` clears every ``SYMBOL_*`` key), so it
+    is sent once instead of every cooldown window.
+    """
+    direction = _position_direction(analysis) or "flat"
+    key = f"{symbol}_{direction}_{grade}"
+    if position is None:
+        return key, None
+    position_ref = position.get("opened_at") or position.get("id")
+    return f"{key}_pos_{position_ref}", 365 * 24 * 60
 
 
 def scan_once(risk_manager: RiskManager):
@@ -312,12 +347,15 @@ def scan_once(risk_manager: RiskManager):
                 )
                 continue
 
-            cooldown_key = f"{symbol}_{grade}"
-            if not _cooldown_ok(cooldown_key):
+            cooldown_key, window = _alert_cooldown(symbol, analysis, grade, position)
+            if _cooldown_active(cooldown_key, window):
                 log.info(f"{symbol}: {grade} alert in cooldown, skipping")
                 continue
 
+            # The window is only consumed once the chart exists: if chart
+            # generation fails nothing was recorded, so the next scan retries.
             chart_path = generate_chart(symbol, ltf_df, analysis, scoring, config.LTF)
+            _mark_cooldown(cooldown_key)
             setup_id = save_setup(symbol, config.LTF, analysis, scoring, chart_path)
             paper_trade = None
             try:
@@ -341,11 +379,23 @@ def scan_once(risk_manager: RiskManager):
                     log.exception("Live trade execution failed for %s", symbol)
 
             stage = determine_stage(scoring, analysis)
-            send_alert(
+            sent = send_alert(
                 symbol, analysis, scoring, chart_path, stage,
                 paper_trade=paper_trade, live_trade=live_trade,
             )
-            log.info(f"Alert sent — {symbol} {grade} (score {score}) stage={stage}")
+            if not sent:
+                # Retry once as plain text without the chart before giving up.
+                sent = send_alert(
+                    symbol, analysis, scoring, None, stage,
+                    paper_trade=paper_trade, live_trade=live_trade,
+                )
+            if sent:
+                log.info(f"Alert sent — {symbol} {grade} (score {score}) stage={stage}")
+            else:
+                log.error(
+                    f"Alert delivery FAILED — {symbol} {grade} (score {score}); "
+                    "setup and paper trade were still recorded"
+                )
 
         except Exception:
             log.exception(f"Error scanning {symbol}")
