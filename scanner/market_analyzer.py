@@ -58,20 +58,34 @@ def detect_bos(df, swing_highs, swing_lows, bias):
     return None
 
 
-def detect_liquidity_sweep(df, swing_highs, swing_lows):
-    """Liquidity sweep: wick past a structural level, body closes back inside."""
+def detect_liquidity_sweep(df, swing_highs, swing_lows, bias):
+    """Liquidity sweep: wick past a structural level, body closes back inside.
+
+    Only a sweep in the bias direction counts: sell-side liquidity (lows) for
+    a bullish bias, buy-side liquidity (highs) for a bearish bias. A sweep of
+    the highs is a bearish signal and must not add points to a buy.
+    """
     if len(df) < 3:
         return None
     last = df.iloc[-1]
-    if swing_lows:
+    if bias == "bullish" and swing_lows:
         _, low_level = swing_lows[-1]
         if last["Low"] < low_level and last["Close"] > low_level:
             return {"type": "bullish_sweep", "level": round(low_level, 5)}
-    if swing_highs:
+    if bias == "bearish" and swing_highs:
         _, high_level = swing_highs[-1]
         if last["High"] > high_level and last["Close"] < high_level:
             return {"type": "bearish_sweep", "level": round(high_level, 5)}
     return None
+
+
+def fvgs_for_bias(fvgs, bias):
+    """Active FVGs whose direction matches the bias (bullish gaps for buys)."""
+    wanted = f"{bias}_fvg"
+    return [
+        f for f in fvgs
+        if f.get("type") == wanted and f.get("active", not f.get("filled"))
+    ]
 
 
 def detect_fvg(df):
@@ -242,6 +256,10 @@ def calculate_entry_levels(df, bias, swing_highs, swing_lows, digits=None):
         tp1 = entry + risk * 2
         tp2 = entry + risk * 3
 
+        # Nearest resistance above entry limits how far price can run.
+        opposing = [price for _, price in swing_highs if price > entry]
+        room = (min(opposing) - entry) if opposing else None
+
     elif bias == "bearish":
 
         # Ambil swing high yang berada di atas entry
@@ -262,8 +280,17 @@ def calculate_entry_levels(df, bias, swing_highs, swing_lows, digits=None):
         tp1 = entry - risk * 2
         tp2 = entry - risk * 3
 
+        # Nearest support below entry limits how far price can run.
+        opposing = [price for _, price in swing_lows if price < entry]
+        room = (entry - max(opposing)) if opposing else None
+
     else:
         return None
+
+    # "rr" is the reward available before the nearest opposing structure,
+    # in R. TP1 is always placed at 2R, so a hardcoded 2.0 scored every setup;
+    # with no opposing swing in the data the path to TP2 is treated as open.
+    rr = round(room / risk, 2) if room is not None else 3.0
 
     levels = {
         "entry": round(entry, digits),
@@ -271,7 +298,7 @@ def calculate_entry_levels(df, bias, swing_highs, swing_lows, digits=None):
         "tp1": round(tp1, digits),
         "tp2": round(tp2, digits),
         "risk": round(risk, digits),
-        "rr": 2.0,
+        "rr": rr,
     }
 
     # Rounding must not collapse the levels (e.g. 5-digit pairs were being
@@ -309,14 +336,14 @@ def analyze_symbol(htf_df, mtf_df, ltf_df, symbol, digits=None):
     if bos:
         result["conditions"].append("BOS")
 
-    sweep = detect_liquidity_sweep(mtf_df, swing_highs_mtf, swing_lows_mtf)
+    sweep = detect_liquidity_sweep(mtf_df, swing_highs_mtf, swing_lows_mtf, bias)
     result["liquidity_sweep"] = sweep
     if sweep:
         result["conditions"].append("Liquidity Sweep")
 
     fvgs = detect_fvg(ltf_df)
     result["fvgs"] = fvgs
-    active_fvgs = [f for f in fvgs if f.get("active", not f["filled"])]
+    active_fvgs = fvgs_for_bias(fvgs, bias)
     if active_fvgs:
         result["conditions"].append("FVG")
 

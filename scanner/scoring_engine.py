@@ -1,4 +1,5 @@
 import config
+from scanner.market_analyzer import fvgs_for_bias
 
 GRADE_EMOJI = {
     "ELITE": "💎",
@@ -40,14 +41,13 @@ def score_setup(analysis):
         score += 2
         breakdown.append("BOS confirmed: +2")
 
-    if analysis.get("liquidity_sweep"):
+    sweep = analysis.get("liquidity_sweep")
+    if sweep and sweep.get("type") == f"{bias}_sweep":
         score += 2
         breakdown.append("Liquidity Sweep: +2")
 
-    active_fvgs = [
-        f for f in analysis.get("fvgs", [])
-        if f.get("active", not f["filled"])
-    ]
+    # Counter-bias gaps (e.g. a bearish FVG on a buy) must not add points.
+    active_fvgs = fvgs_for_bias(analysis.get("fvgs", []), bias)
     if active_fvgs:
         score += 2
         breakdown.append(f"Active FVG ({len(active_fvgs)}): +2")
@@ -66,9 +66,10 @@ def score_setup(analysis):
         breakdown.append(f"Active session ({session}): +1")
 
     levels = analysis.get("levels") or {}
-    if levels.get("rr", 0) >= 2:
+    rr = levels.get("rr") or 0
+    if rr >= 2:
         score += 1
-        breakdown.append("RR >= 2: +1")
+        breakdown.append(f"RR {rr:g} to structure >= 2: +1")
 
     grade = classify_setup(score)
 
